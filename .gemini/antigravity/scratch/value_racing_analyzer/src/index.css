@@ -1,0 +1,40 @@
+:root {
+  --primary: #00BCD4;
+  --primary-hover: #00ACC1;
+  --bg-dark: #121212;
+  --bg-panel: #1E1E1E;
+  --text-main: #FFFFFF;
+  --text-muted: #B0BEC5;
+  --border-color: #333333;
+  --success: #4CAF50;
+  --warning: #FFC107;
+  --danger: #F44336;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #616161;
+}
