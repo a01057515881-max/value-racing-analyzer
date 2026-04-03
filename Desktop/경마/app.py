@@ -458,6 +458,48 @@ def display_cleaned_dataframe(df):
     
     st.dataframe(styler, use_container_width=True, hide_index=True)
 
+# [NEW] UI 헬퍼 함수: 텍스트 정제 (Gemini 오작동 방지)
+def fix_speed_text(text):
+    """브라우저 폰트 깨짐 및 Gemini의 타밀어/벵골어 혼용 버그를 방지합니다."""
+    if not text: return ""
+    # 벵골어, 타밀어 등 Gemini가 스피드 대신에 출력하는 오작동 문자 치환
+    typos = ['\u09b8\u09cd\u09aa\u09c0', '\u0bb8\u0bcd\u0baa\u0bc0', '슾피드', '쏀피드', '쇱피드']
+    for typo in typos:
+        text = text.replace(typo, '스피드')
+    # 렌더링 폰트 깨짐 방지로 스피드를 속도로 치환 유지
+    return text.replace('스피드', '속도')
+
+# [NEW] UI 헬퍼 함수: 베팅 성과 분석표 렌더링
+def render_payout_analysis(payouts):
+    """복기 리포트에서 베팅 전략별 성과 시뮬레이션 표를 렌더링합니다."""
+    if not payouts: 
+        st.caption("ℹ️ 베팅 성과 데이터가 없습니다.")
+        return
+    
+    try:
+        df = pd.DataFrame(payouts)
+        # 컬럼명 한글화 및 가독성 개선
+        df_display = df.rename(columns={
+            "name": "🎯 베팅 전략", 
+            "hit_qui_mark": "복승", 
+            "hit_trio_mark": "삼복승", 
+            "payout_qui": "복승 배당", 
+            "payout_trio": "삼복 배당"
+        })
+        
+        # ⭕/❌ 표시가 있는 컬럼 강조 스타일링
+        def highlight_hits(val):
+            if val == "⭕": color = "#e8f5e9"
+            elif val == "❌": color = "#ffebee"
+            else: color = "transparent"
+            return f'background-color: {color}'
+
+        cols = ["🎯 베팅 전략", "복승", "삼복승", "복승 배당", "삼복 배당"]
+        st.markdown("**📊 실전 베팅 성과 (Simulation)**")
+        st.table(df_display[cols])
+    except Exception as e:
+        st.error(f"⚠️ 성과 분석표 생성 중 오류: {e}")
+
 def render_analysis_report(item, idx=0):
     """사용자가 요청한 오리지널 UI (첫 번째 방식) 복원 및 캡처 ID 부여"""
     # [NEW] 캡처를 위한 컨테이너 시작
@@ -2559,7 +2601,7 @@ elif menu_selection == "🔍 복기":
                             except:
                                 return 99.0
 
-                        for name, rank in sorted(results.items(), key=lambda x: safe_rank(x[1])):
+                        for name, rank in sorted(results.items(), key=lambda x: safe_rank(x[1])) if isinstance(results, dict) else []:
                             # 딕셔너리 포맷이면 rank 값을 다시 추출해서 찍기
                             display_rank = rank.get('rank', '?') if isinstance(rank, dict) else rank
                             st.write(f"{display_rank}착: {name}")
@@ -2572,18 +2614,9 @@ elif menu_selection == "🔍 복기":
                     render_payout_analysis(l['payout_analysis'])
                     st.markdown("---")
 
-                # [FIX] 브라우저(OS 별) '스피드' 글씨 폰트 깨짐/이모지 오작동 및 Gemini 생성 버그(타밀어/벵골어 혼용) 방지를 위한 강력한 텍스트 정제 기능
+                # [FIX] 브라우저(OS 별) '스피드' 글씨 폰트 깨짐 방지 (전역 함수 사용)
                 raw_analysis = l.get('analysis', '분석 내용 없음')
                 raw_mismatch = l.get('mismatch_reason', 'N/A')
-                
-                def fix_speed_text(text):
-                    if not text: return ""
-                    # 벵골어, 타밀어 등 Gemini가 스피드 대신에 출력하는 오작동 문자 치환
-                    typos = ['\u09b8\u09cd\u09aa\u09c0', '\u0bb8\u0bcd\u0baa\u0bc0', '슾피드', '쏀피드', '쇱피드']
-                    for typo in typos:
-                        text = text.replace(typo, '스피드')
-                    # 렌더링 폰트 깨짐 방지로 스피드를 속도로 치환 유지
-                    return text.replace('스피드', '속도')
                 
                 safe_analysis = fix_speed_text(raw_analysis)
                 safe_mismatch = fix_speed_text(raw_mismatch)
