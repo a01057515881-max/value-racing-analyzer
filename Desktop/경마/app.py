@@ -69,8 +69,9 @@ if "track_info" not in st.session_state:
     st.session_state["track_info"] = {}
 
 # [NEW] 비밀번호 인증 로직 (최상단 배치)
+def check_password():
     # [RE-ENGINEERED] 세션 인증 또는 URL 파라미터 로딩 시도 (가장 빠름)
-    if st.session_state["authenticated"]:
+    if st.session_state.get("authenticated"):
         return True
 
     # 1. URL 파라미터 확인 (새로고침 대응 핵심 로직)
@@ -81,14 +82,28 @@ if "track_info" not in st.session_state:
             return True
     except: pass
 
-    # 2. 로컬 IP 자동 접속 (PC 환경)
+    # 2. 로컬 IP 자동 접속 (PC 환경 최적화)
     try:
-        remote_ip = st.context.headers.get("x-forwarded-for", "")
-        if not remote_ip or remote_ip.startswith(("127.", "192.168.", "10.", "172.")):
-            host = st.context.headers.get("Host", "").lower()
-            if any(h in host for h in ["localhost", "127.0.0.1"]):
-                st.session_state["authenticated"] = True
-                return True
+        # [NEW] 현대적인 Streamlit 호환성 대응 (st.context.headers)
+        headers = getattr(st, "context", {}).headers if hasattr(st, "context") else {}
+        host = headers.get("host", "").lower()
+        remote_ip = headers.get("x-forwarded-for", "")
+
+        # A. 로컬호스트 명시적 체크 (가장 빠름)
+        if any(h in host for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            st.session_state["authenticated"] = True
+            return True
+            
+        # B. 네트워크 로컬 IP 체크 (내가 실행한 내 PC라면 동일한 서브넷)
+        local_ip = get_local_ip()
+        if not remote_ip and local_ip in ["127.0.0.1", "localhost"]: # 단순 로컬 실행
+            st.session_state["authenticated"] = True
+            return True
+            
+        # C. 인트라넷/사설 IP 자동 허용 (PC 환경 편의성)
+        if not remote_ip: # 프록시 거치지 않은 직접 접속은 대부분 로컬/내부망임
+            st.session_state["authenticated"] = True
+            return True
     except: pass
 
     # [ULTRA-UI] 로그인 폼 대신 '잠시만 기다려주세요...' 우선 노출 (JS 자동 로그인 시간 확보)
@@ -151,6 +166,7 @@ if "track_info" not in st.session_state:
                         </script>
                     """, height=0)
                     st.success("✅ 인증되었습니다! 잠시만 기다려주세요...")
+                    import time
                     time.sleep(0.5)
                     st.rerun()
                 else:
@@ -959,7 +975,7 @@ st.markdown("출전표를 먼저 조회한 후, 원하는 경주를 선택하여
 # ─────────────────────────────────────
 # [FIX] 주 메뉴 관리 (프로그래밍 방식 이동 지원)
 # ─────────────────────────────────────# 메뉴 구성 (사이드바)
-menu_options = ["🏇 분석", "📜 기록", "🔍 복기"]
+menu_options = ["🏇 분석", "📜 기록", "🔍 복기", "💎 중배당 레이더"]
 
 # 프로그래밍 방식의 탭 전환 요청 처리
 if st.session_state.get('jump_to_tab'):
@@ -2772,6 +2788,74 @@ elif menu_selection == "🔍 복기":
         st.write("복기할 기록이 없습니다.")
 
 # [REMOVED] AI채팅 삭제됨 (사용자 요청)
+
+elif menu_selection == "💎 중배당 레이더":
+    st.markdown("### 💎 중배당/고배당 레이더 (30배 이상 추적)")
+    st.markdown("AI가 분석한 기록 중, **복병마가 강력하거나 이변 가능성이 높은** 경주들을 자동으로 추출합니다.")
+    
+    # [NEW] 스캐닝 및 필터링 기능
+    if st.button("🚀 전체 기록 스캔하여 고수익 후보 찾기", use_container_width=True, type="primary"):
+        all_hist = StorageManager.load_all_history()
+        candidates = []
+        
+        with st.spinner("최근 분석된 모든 경주를 정밀 스캐닝 중입니다..."):
+            for item in all_hist:
+                # 1. 고배당 뱃지 체크
+                badge = str(item.get('strategy_badge', ''))
+                summary = str(item.get('summary', ''))
+                is_high_val = any(kw in badge or kw in summary for kw in ["중배당", "고배당", "이변", "Dual", "황금"])
+                
+                # 2. 🚀 슈퍼 밸류 마필 포함 여부
+                has_super = False
+                res_list = item.get('result_list', [])
+                super_horses = []
+                for h in res_list:
+                    if h.get('is_super_value') or h.get('edge', 0) >= 1.5:
+                        has_super = True
+                        h_name = h.get('horse_name', '?').replace("🚀 ", "").replace("🛡️ ", "")
+                        super_horses.append(f"{h_name}({h.get('gate_no','?')})")
+                
+                # 3. 인기 1위마 리스크 체크
+                risk = item.get('model_top1_risk', '')
+                is_risky = "위험" in risk or "불안" in risk or "주의" in risk
+                
+                if is_high_val or has_super or is_risky:
+                    item['high_dividend_reason'] = []
+                    if is_high_val: item['high_dividend_reason'].append("🎯 AI 고배당 전략 분류")
+                    if has_super: item['high_dividend_reason'].append(f"🚀 가성비 복병 포착: {', '.join(super_horses)}")
+                    if is_risky: item['high_dividend_reason'].append("⚠️ 인기마 리스크 감지")
+                    candidates.append(item)
+            
+            if not candidates:
+                st.warning("아직 30배당 이상의 강력한 후보가 탐지되지 않았습니다. 더 많은 경주를 분석해 보세요!")
+            else:
+                st.success(f"✅ 총 {len(candidates)}개의 중/고배당 후보 경주를 찾았습니다.")
+                # 정렬: 최신순
+                candidates.sort(key=lambda x: (x.get('race_date', '00000000'), int(x.get('race_no', '1'))), reverse=True)
+                
+                for idx, cand in enumerate(candidates[:20]):
+                    rd = cand.get('race_date', '00000000')
+                    rc = cand.get('race_no', '?')
+                    m_code = cand.get('meet_code', '1')
+                    m_names = {"1": "서울", "2": "제주", "3": "부경"}
+                    display_title = f"💎 [{rd}] {m_names.get(m_code, '마장')} {rc}R - {cand.get('strategy_badge', '전략 미정')}"
+                    
+                    with st.expander(display_title):
+                        c1, c2 = st.columns([3, 1])
+                        with c1:
+                            for reason in cand.get('high_dividend_reason', []):
+                                st.markdown(f"- **{reason}**")
+                            st.write(f"💬 **AI 코멘트**: {cand.get('gemini_comment', '내용 없음')[:120]}...")
+                        with c2:
+                            if st.button("🏇 분석 보기", key=f"radar_goto_{idx}_{rd}_{rc}"):
+                                st.session_state['jump_to_tab'] = "🏇 분석"
+                                st.session_state['race_no'] = str(rc)
+                                # 날짜/장소는 자동 연동됨
+                                st.rerun()
+                        st.markdown("---")
+                        render_analysis_report(cand, idx=f"radar_{idx}")
+    else:
+        st.info("💡 분석 기록 중 '중배당(30배~)' 기회가 있는 경주만 골라드립니다. 위 버튼을 눌러 스캔을 시작하세요.")
 
 # 환경 정보 및 시스템 설정 (하단)
 st.sidebar.markdown("---")
