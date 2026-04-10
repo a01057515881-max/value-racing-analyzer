@@ -1,0 +1,109 @@
+﻿Analyzing 26 race days in March (Full Quant Analysis)...
+
+==================================================
+MARCH CALIBRATION (Full Engine Analysis)
+   - Total Targeted: 187 races
+   - Total Bet:      1870.0
+   - Total Won:      2388.4
+   - FINAL ROI:      127.72%
+==================================================
+C:\Users\user\Desktop\경마\tmp\apr_oos_backtest_with_mdd.py:195: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
+
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df_targeted["cum_pnl"] = df_targeted["win_pnl"].cumsum()
+      [APRIL OOS SNIPER v2.0 (Resurrection: Restore 290x & Fix Filter)]
+================================================================================
+System Logic: [1] Restore Score Ranking [2] Dividend-Value Filter [3] Full Market Injection
+
+================================================================================
+[SNIPER v6.0 LOTTO AUDIT - (R:Rank, C:Conf, L:Lotto, H:Collapse)]
+--------------------------------------------------------------------------------
+Date       | Race | Decision             | Audit (R,C,L,H) | Div
+--------------------------------------------------------------------------------
+20260403   | 1    | [T] SNI-PRO - AI 압도적  | R:25,C:100,L:V,H:- | -        
+20260403   | 1    | [T] SNIPER - 선행 자멸 (고 | R:22,C:100,L:V,H:V | 19.5x    [HIT]
+20260403   | 2    | [T] SNI-PRO - AI 압도적  | R:28,C:100,L:V,H:- | -        
+20260403   | 2    | [T] SNIPER - 선행 자멸 (고 | R:23,C:100,L:-,H:V | -        
+20260403   | 3    | [T] SNI-PRO - AI 압도적  | R:32,C:100,L:V,H:- | -        
+20260403   | 3    | [T] SNI-PRO - AI 압도적  | R:25,C:100,L:V,H:- | -        
+20260403   | 4    | [S] PASS - 가치 부족 고확신  | R:19,C:100,L:V,H:- | -        
+20260403   | 4    | [T] SNIPER - 선행 자멸 (고 | R:26,C:100,L:V,H:V | -        
+20260403   | 5    | [S] PASS - 가치 부족 고확신  | R:19,C:100,L:V,H:- | -        
+20260403   | 5    | [T] SNIPER - 선행 자멸 (고 | R:33,C:100,L:-,H:V | -        
+20260403   | 6    | [T] SNI-PRO - AI 압도적  | R:40,C:100,L:V,H:- | -        
+20260403   | 6    | [T] SNIPER - 선행 자멸 (고 | R:40,C:100,L:V,H:V | -        
+20260403   | 7    | [S] PASS - 가치 부족 고확신  | R:20,C:100,L:-,H:- | -        
+20260403   | 7    | [T] SNIPER - 선행 자멸 (고 | R:28,C:100,L:V,H:V | -        
+20260403   | 8    | [T] LOTTO - 고배당 정밀 타격 | R:28,C:70,L:V,H:- | -        
+20260403   | 8    | [T] SNI-PRO - AI 압도적  | R:33,C:100,L:V,H:- | -        
+20260404   | 1    | [T] SNI-PRO - AI 압도적  | R:27,C:100,L:V,H:- | -        
+20260404   | 2    | [T] SNI-PRO - AI 압도적  | R:24,C:100,L:V,H:- | -        
+20260404   | 2    | [T] SNIPER - 선행 자멸 (고 | R:15,C:100,L:V,H:V | -        
+20260404   | 3    | [S] PASS - 전략적 휴식 (기회 | R:18,C:10,L:-,H:- | -        
+20260404   | 3    | [T] SNIPER - 선행 자멸 (고 | R:15,C:100,L:V,H:V | -        
+20260404   | 4    | [T] SNI-PRO - AI 압도적  | R:24,C:100,L:V,H:- | 15.5x    [HIT]
+20260404   | 4    | [T] SNIPER - 선행 자멸 (고 | R:15,C:100,L:V,H:V | -        
+20260404   | 5    | [T] SNI-PRO - AI 압도적  | R:31,C:100,L:V,H:- | -        
+20260404   | 5    | [T] SNIPER - 선행 자멸 (고 | R:15,C:100,L:V,H:V | -        
+20260404   | 6    | [T] SNI-PRO - AI 압도적  | R:33,C:100,L:V,H:- | -        
+20260404   | 6    | [T] SNIPER - 선행 자멸 (고 | R:15,C:100,L:V,H:V | -        
+20260404   | 7    | [T] SNI-PRO - AI 압도적  | R:30,C:100,L:V,H:- | -        
+20260404   | 8    | [S] PASS - 가치 부족 고확신  | R:22,C:100,L:V,H:- | -        
+20260404   | 9    | [T] SNIPER - 선행 자멸 (고 | R:27,C:100,L:V,H:V | -        
+20260404   | 10   | [T] SNI-PRO - AI 압도적  | R:25,C:100,L:-,H:- | -        
+20260404   | 11   | [T] SNI-PRO - AI 압도적  | R:32,C:100,L:V,H:- | -        
+20260405   | 1    | [T] SNI-PRO - AI 압도적  | R:29,C:100,L:V,H:- | -        
+20260405   | 1    | [T] SNIPER - 선행 자멸 (고 | R:20,C:100,L:-,H:V | -        
+20260405   | 2    | [T] SNI-PRO - AI 압도적  | R:27,C:100,L:V,H:- | 20.4x    [HIT]
+20260405   | 2    | [T] SNIPER - 선행 자멸 (고 | R:34,C:100,L:V,H:V | -        
+20260405   | 3    | [T] SNI-PRO - AI 압도적  | R:30,C:100,L:V,H:- | -        
+20260405   | 3    | [S] PASS - 전략적 휴식 (기회 | R:18,C:70,L:-,H:- | 31.5x    [HIT]
+20260405   | 4    | [T] SNIPER - 선행 자멸 (고 | R:30,C:100,L:V,H:V | -        
+20260405   | 4    | [T] SNIPER - 선행 자멸 (고 | R:18,C:100,L:-,H:V | -        
+20260405   | 5    | [S] PASS - 가치 부족 고확신  | R:19,C:100,L:-,H:- | -        
+20260405   | 5    | [T] SNIPER - 선행 자멸 (고 | R:31,C:100,L:V,H:V | -        
+20260405   | 6    | [S] PASS - 가치 부족 고확신  | R:19,C:100,L:V,H:- | -        
+20260405   | 6    | [T] SNIPER - 선행 자멸 (고 | R:36,C:100,L:V,H:V | -        
+20260405   | 7    | [S] PASS - 가치 부족 고확신  | R:18,C:100,L:V,H:- | -        
+20260405   | 7    | [T] SNIPER - 선행 자멸 (고 | R:27,C:100,L:V,H:V | -        
+20260405   | 8    | [S] PASS - 가치 부족 고확신  | R:15,C:100,L:-,H:- | -        
+20260405   | 9    | [T] SNIPER - 선행 자멸 (고 | R:23,C:100,L:V,H:V | -        
+20260405   | 10   | [T] SNI-PRO - AI 압도적  | R:24,C:100,L:-,H:- | -        
+SUMMARY REPORT
+   - Total Races:    49
+   - Total Targeted: 39 (79.6%)
+   - Total Skipped:  10 (20.4%)
+   - Total Hits:     3 (Targeted Hit Rate: 7.7%)
+--------------------------------------------------------------------------------
+[TOP 3 TARGETED HITS]
+   - 20260405 2R: Total Dividend 20.4x
+   - 20260403 1R: Total Dividend 19.5x
+   - 20260404 4R: Total Dividend 15.5x
+--------------------------------------------------------------------------------
+Total Bet: 390.0 | Total Won: 20.4
+Net Profit: -369.6 units
+FINAL ROI: 5.23%
+Max Drawdown: 359.6 units
+================================================================================
+
+
+================================================================================
+[SUMMARY REPORT]
+   - Total Races:    49
+   - Total Targeted: 39 (79.6%)
+   - Total Skipped:  10 (20.4%)
+   - Total Hits:     3 (Targeted Hit Rate: 7.7%)
+--------------------------------------------------------------------------------
+[TOP 3 TARGETED HITS]
+   - 20260405 2R: Total Dividend 20.4x
+   - 20260403 1R: Total Dividend 19.5x
+   - 20260404 4R: Total Dividend 15.5x
+--------------------------------------------------------------------------------
+Total Bet: 390.0 | Total Won: 20.4
+Net Profit: -369.6 units
+FINAL ROI: 5.23%
+Max Drawdown: 359.6 units
+================================================================================
+

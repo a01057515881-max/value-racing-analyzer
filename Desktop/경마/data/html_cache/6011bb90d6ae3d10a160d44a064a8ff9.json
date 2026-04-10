@@ -1,0 +1,7 @@
+{
+  "timestamp": 1775847797.8726792,
+  "url": "https://race.kra.co.kr/",
+  "params": null,
+  "content": "<!doctype html>\n<html lang=\"ko\">\n<script type=\"text/javascript\">\n\tvar d = new Date();\n\tvar year = d.getFullYear();\n\tvar month = d.getMonth() + 1;\n\tvar day = d.getDate();\n\tvar hour = d.getHours();\n\n\tif ((d.getMonth()+1) < 10) month = \"0\" + month;\n\n\tif (day < 10) day = \"0\" + day;\n\n\tif (hour < 10) hour = \"0\" + hour;\n\t\n\tvar today = \"\" + year + month + day + hour;\n\t\n\tif (today >= \"2021102420\" && today < \"2021102709\") {\n\t\tdocument.location.href=\"/system_notice/systemNotice.html\";\n\t}else{\n\t\tdocument.location.href=\"/seoulMain.do\";\n\t}\n</script>\n<body>\n</body>\n</html>\n",
+  "encoding": "cp949"
+}

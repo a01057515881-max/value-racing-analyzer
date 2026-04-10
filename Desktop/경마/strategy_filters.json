@@ -1,0 +1,80 @@
+[
+  {
+    "distance": 900,
+    "grade": "제6등급",
+    "historical_roi": 827.6923076923076,
+    "count": 13
+  },
+  {
+    "distance": 1110,
+    "grade": "제5등급",
+    "historical_roi": 266.0,
+    "count": 5
+  },
+  {
+    "distance": 1300,
+    "grade": "국5등급",
+    "historical_roi": 112.27272727272728,
+    "count": 22
+  },
+  {
+    "distance": 1400,
+    "grade": "2등급",
+    "historical_roi": 221.99999999999997,
+    "count": 5
+  },
+  {
+    "distance": 1400,
+    "grade": "국5등급",
+    "historical_roi": 126.66666666666669,
+    "count": 27
+  },
+  {
+    "distance": 1400,
+    "grade": "제2등급",
+    "historical_roi": 253.33333333333331,
+    "count": 3
+  },
+  {
+    "distance": 1400,
+    "grade": "혼4등급",
+    "historical_roi": 278.57142857142856,
+    "count": 14
+  },
+  {
+    "distance": 1600,
+    "grade": "2등급",
+    "historical_roi": 443.33333333333337,
+    "count": 3
+  },
+  {
+    "distance": 1600,
+    "grade": "혼4등급",
+    "historical_roi": 180.0,
+    "count": 7
+  },
+  {
+    "distance": 1700,
+    "grade": "국5등급",
+    "historical_roi": 250.0,
+    "count": 4
+  },
+  {
+    "distance": 1800,
+    "grade": "2등급",
+    "historical_roi": 232.50000000000003,
+    "count": 4
+  },
+  {
+    "distance": 1800,
+    "grade": "국5등급",
+    "historical_roi": 320.0,
+    "count": 9
+  },
+  {
+    "distance": 1800,
+    "grade": "혼3등급",
+    "historical_roi": 112.85714285714286,
+    "count": 7
+  }
+]

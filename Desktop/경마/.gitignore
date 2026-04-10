@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.streamlit/config.toml
+.streamlit/secrets.toml
+.venv/
+.env
+data/ai_cache/
+data/history/
+data/backtest_results/
+venv/
+node_modules/
+*.exe
+*.log
+.DS_Store
+build/
+dist/
+*.spec
+*.pkg
+*.pyz
+
+# Large files
+data/guides/

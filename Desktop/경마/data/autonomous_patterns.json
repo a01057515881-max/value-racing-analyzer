@@ -1,0 +1,97 @@
+{
+  "synergies": [
+    {
+      "type": "JK-TR",
+      "jockey": "빅투아르",
+      "trainer": "리카디",
+      "count": 3,
+      "bonus": 9
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "루이스",
+      "trainer": "최영주",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "씨씨웡",
+      "trainer": "최용건",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "빅투아르",
+      "trainer": "문병기",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "이성민",
+      "trainer": "이준호",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "한영민",
+      "trainer": "김태준",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "최범현",
+      "trainer": "박지헌",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "마이아",
+      "trainer": "김동균",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "김정준",
+      "trainer": "송문길",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-TR",
+      "jockey": "김동영",
+      "trainer": "구영준",
+      "count": 2,
+      "bonus": 6
+    },
+    {
+      "type": "JK-HR",
+      "jockey": "씨씨웡",
+      "horse": "마음하나",
+      "count": 2,
+      "bonus": 20
+    },
+    {
+      "type": "JK-HR",
+      "jockey": "이성민",
+      "horse": "대방가",
+      "count": 2,
+      "bonus": 20
+    },
+    {
+      "type": "JK-HR",
+      "jockey": "김동영",
+      "horse": "베스트보이",
+      "count": 2,
+      "bonus": 20
+    }
+  ],
+  "course_adaptability": {},
+  "high_div_conditions": []
+}

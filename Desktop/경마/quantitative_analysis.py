@@ -2193,6 +2193,34 @@ class QuantitativeAnalyzer:
             sniper_grade = "정예승부 - 가성비 밸류 승부 (고확신)"
             bet_units = 10
             bet_guide = "💎 가성비와 확신도가 모두 충족된 정예 경주입니다. 안정적인 수익을 기대합니다."
+        # 5. [FIX] 초정밀 황금 가치마 모순 해결 (가치는 높은데 확신도가 낮아 '관망'이 되는 현상 방지)
+        elif rank_sum >= 28:
+            sniper_grade = "초정밀 황금 가치 승부 (고배당 타겟)"
+            bet_units = 5
+            bet_guide = "💎 [AI 팩트체크] 기록 대비 인기가 크게 저평가된 3~7위 가치마가 포착되었습니다. 인기 1,2위를 과감히 배제하거나 묶어서 고배당을 노리세요."
+        # 6. 중배당 실속 승부 (MEDIUM-VAL): 확신도는 보통 이상(70)이면서 배당 가치(rank_sum 18 이상)가 있는 경우
+        elif confidence >= 70 and rank_sum >= 18:
+            sniper_grade = "실속승부 - 중배당 가치마 공략"
+            bet_units = 5
+            bet_guide = "⚖️ [The Shield 승인] 초대박 고배당은 아니지만, 분석 대비 중배당(10~25배) 수익 가치가 충분히 있는 실속형 경주입니다."
+
+        # [SNI v7.5] 예상 복승 배당 필터 적용 (제주 변동성 고려)
+        ax1_odds = ranked[0].get("market_odds", 0.0) if len(ranked) >= 1 else 0.0
+        ax2_odds = ranked[1].get("market_odds", 0.0) if len(ranked) >= 2 else 0.0
+        expected_div = (ax1_odds * ax2_odds) / 1.5 if (ax1_odds > 0 and ax2_odds > 0) else 0.0
+        
+        # [NEW] 제주(2)는 혼전/변수가 너무 많아 배당 필터를 아예 적용하지 않고 모두 승부처로 살림
+        # [MODIFIED - The Shield 완화] 고배당(30배)만 노리다가 중배당 기회를 놓치는 문제 방지 
+        div_threshold = 0.0 if meet_code == "2" else 10.0
+        
+        if bet_units > 0:
+            if expected_div > 0 and expected_div < div_threshold:
+                sniper_grade = f"⚠️ 저배당 관망 추천 (예상 복승 {expected_div:.1f}배)"
+                bet_units = 0
+                bet_guide = f"🚨 AI 분석 결과 주력 쌍축({ax1_odds}x, {ax2_odds}x) 예상 복승 배당이 {div_threshold}배 미만이므로 배팅을 패스합니다."
+            else:
+                prefix = f"💥 [{int(div_threshold)}배 이상 승부처] " if expected_div > 0 else "💥 [고배당 승부처] "
+                sniper_grade = prefix + sniper_grade
 
         # [SNI v7.4] 베팅 모드 결정 (Multi-Layered Betting Strategy)
         bet_mode = "NONE"

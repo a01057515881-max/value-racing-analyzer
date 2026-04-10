@@ -1,0 +1,17 @@
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+html5lib
+pandas>=2.1.0
+numpy
+altair
+google-generativeai
+google-genai
+streamlit>=1.30.0
+rich>=13.0.0
+python-dotenv
+scipy
+joblib
+xgboost
+scikit-learn
+aiohttp>=3.9.0
