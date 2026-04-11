@@ -1,0 +1,14 @@
+{
+  "timestamp": 1775907099.2753754,
+  "url": "https://apis.data.go.kr/B551015/API18_1/dailyTraining_1",
+  "params": {
+    "meet": "1",
+    "tr_date": "20250330",
+    "serviceKey": "ae10bda1d61dea0488b1968dc90ea94a14c85efc006b45646b17eb695332116c",
+    "_type": "json",
+    "numOfRows": "100",
+    "pageNo": "1"
+  },
+  "content": "{\"response\":{\"header\":{\"resultCode\":99,\"resultMsg\":\"가용한 세션이 존재하지 않습니다. (100\\/100)\"},\"body\":\"\"}}",
+  "encoding": "UTF-8"
+}

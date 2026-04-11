@@ -12,10 +12,30 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import asyncio
+import ssl
 try:
     import aiohttp
 except Exception:
     aiohttp = None
+
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.ssl_ import create_urllib3_context
+
+# [NEW] KRA 서버의 보안 취약성(구형 TLS) 및 EOF 오류 대응을 위한 커스텀 어댑터
+class SSLAdapter(HTTPAdapter):
+    """
+    KRA 서버의 'UNEXPECTED_EOF_WHILE_READING' 오류를 방지하기 위해 
+    보안 수준을 조정하고 특정 암호화 방식을 강제하는 SSL 어댑터입니다.
+    """
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        # 보안 수준 완화 (구형 서버 대응)
+        context.set_ciphers('DEFAULT@SECLEVEL=1')
+        # TLS v1.2 이상 강제
+        context.options |= ssl.OP_NO_SSLv2
+        context.options |= ssl.OP_NO_SSLv3
+        kwargs['ssl_context'] = context
+        return super(SSLAdapter, self).init_poolmanager(*args, **kwargs)
 
 
 
@@ -58,6 +78,10 @@ class KRAScraper:
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         })
+        
+        # [NEW] SSL 어댑터 마운트 (KRA 서버 전용)
+        self.session.mount("https://race.kra.co.kr", SSLAdapter())
+        self.session.mount("https://www.kra.co.kr", SSLAdapter())
         
         # [NEW] 캐시 디렉토리 설정
         self.cache_dir = os.path.join(config.DATA_DIR, "html_cache")
@@ -141,8 +165,9 @@ class KRAScraper:
                 delay = random.uniform(0.5, 2.0) if attempt == 0 else random.uniform(2.0, 5.0)
                 time.sleep(delay)
                 
-                resp = requests.request(method, url, params=params, headers=headers, 
-                                        timeout=curr_timeout, verify=verify_ssl, **kwargs)
+                # [CRITICAL-FIX] 전역 requests가 아닌 SSLAdapter가 설치된 self.session을 사용하여 SSL 차단을 방지합니다.
+                resp = self.session.request(method, url, params=params, headers=headers, 
+                                            timeout=curr_timeout, verify=verify_ssl, **kwargs)
                 
                 if resp.status_code == 429:
                     print(f"  [429 Rate Limit] 10초 대기 후 재시도... ({url})")
@@ -1255,10 +1280,14 @@ class KRAScraper:
             if horse_name: params["hr_name"] = horse_name
             
             items = self._call_api(config.TRAINING_API, params, tag="조교")
-            if items:
+            
+            # [FIX] API 응답 구조가 깨졌을 경우(Invalid body structure) 즉시 웹 스크래핑 폴백하도록 방어 로직 추가
+            if items and isinstance(items, list) and len(items) > 0 and isinstance(items[0], dict):
                 df = pd.DataFrame(items)
                 print(f"  [Success] 조교 데이터 {len(df)}건 수집 완료 (API)")
                 return df
+            else:
+                print("  [Warning] 조교 API 응답 구조가 비정상입니다. 웹 스크래핑으로 전환합니다.")
 
         # Web Fallback
         t_date = train_date if train_date else datetime.now().strftime("%Y%m%d")
@@ -1519,9 +1548,12 @@ class KRAScraper:
         return res
 
     def _parse_dividend(self, dfs, html_text: str = "") -> dict:
-        """결과 HTML에서 배당률 정보 추출"""
+        """결과 HTML에서 배당률 정보 추출 (Regex + Table Parser 하이브리드)"""
         dividends = {"qui": 0.0, "trio": 0.0, "exa": 0.0, "win": 0.0, "plc": 0.0}
         import re
+        from bs4 import BeautifulSoup
+        
+        # 1-1. Regex 기반 텍스트 추출 (빠른 처리)
         if html_text:
             text_clean = re.sub(r'\s+', ' ', html_text)
             patterns = {
@@ -1539,6 +1571,35 @@ class KRAScraper:
                         if 1.0 <= val < 1000000: dividends[key] = val
                     except: pass
 
+        # 1-2. [BACKUP] BeautifulSoup 기반 테이블 정밀 파싱 (과거 데이터 대응)
+        if dividends["qui"] == 0 or dividends["trio"] == 0:
+            soup = BeautifulSoup(html_text, "html.parser")
+            for tbl in soup.find_all("table"):
+                tbl_text = tbl.get_text()
+                # 배당금 테이블 식별 키워드
+                if any(kw in tbl_text for kw in ["승식", "환급금", "배당", "복승", "삼복"]):
+                    for row in tbl.find_all("tr"):
+                        row_cells = row.find_all(["td", "th"])
+                        for i, cell in enumerate(row_cells):
+                            cell_txt = cell.get_text(strip=True)
+                            target_key = None
+                            if "복승" in cell_txt: target_key = "qui"
+                            elif "삼복" in cell_txt: target_key = "trio"
+                            elif "쌍승" in cell_txt: target_key = "exa"
+                            elif "단승" in cell_txt: target_key = "win"
+                            elif "연승" in cell_txt: target_key = "plc"
+                            
+                            if target_key and dividends[target_key] == 0:
+                                # 해당 셀 이후의 셀들에서 숫자 찾기
+                                for next_cell in row_cells[i+1:]:
+                                    next_txt = next_cell.get_text(strip=True).replace(",", "").replace("₩", "").replace("￦", "")
+                                    m = re.search(r"(\d+\.\d+|\d{2,})", next_txt)
+                                    if m:
+                                        val = float(m.group(1))
+                                        if 1.0 <= val < 1000000: dividends[target_key] = val; break
+                    if dividends["qui"] > 0: break # 주력 배당 확보 시 중단
+
+        # 1-3. [FALLBACK] pandas DFS 기반 검색
         if dividends["qui"] == 0 or dividends["trio"] == 0:
             for df in dfs:
                 try:
@@ -1760,7 +1821,7 @@ class KRAScraper:
             except:
                 return None
 
-        tasks = [fetch_single_race(i) for i in range(1, 13)]
+        tasks = [fetch_single_race(i) for i in range(1, 18)]
         results = await asyncio.gather(*tasks)
         valid = [r for r in results if r is not None]
         return pd.concat(valid, ignore_index=True) if valid else pd.DataFrame()

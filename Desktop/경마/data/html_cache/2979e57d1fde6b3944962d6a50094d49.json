@@ -1,0 +1,14 @@
+{
+  "timestamp": 1775885998.4310308,
+  "url": "https://apis.data.go.kr/B551015/API26_2/entrySheet_2",
+  "params": {
+    "rc_date": "20250425",
+    "meet": "1",
+    "numOfRows": 400,
+    "serviceKey": "ae10bda1d61dea0488b1968dc90ea94a14c85efc006b45646b17eb695332116c",
+    "_type": "json",
+    "pageNo": "1"
+  },
+  "content": "{\"response\":{\"header\":{\"resultCode\":\"00\",\"resultMsg\":\"NORMAL SERVICE.\"},\"body\":{\"items\":\"\",\"numOfRows\":400,\"pageNo\":1,\"totalCount\":0}}}",
+  "encoding": "cp949"
+}

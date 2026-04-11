@@ -95,8 +95,26 @@ class GeminiAnalyzer:
     """Gemini API 기반 정성 분석기"""
 
     def __init__(self):
-        self.client = genai.Client(api_key=config.GEMINI_API_KEY)
+        self._client = None
+        self._last_api_key = None
         self.lessons_file = os.path.join(os.path.dirname(__file__), "data", "lessons.json")
+
+    @property
+    def client(self):
+        """설정에서 실시간으로 가장 최신 API 키를 가져와 클라이언트를 반환"""
+        current_key = config.get_gemini_api_key()
+        if self._client is None or current_key != self._last_api_key:
+            if current_key:
+                self._client = genai.Client(api_key=current_key)
+                self._last_api_key = current_key
+            else:
+                return None
+        return self._client
+
+    @property
+    def fast_model(self):
+        """실시간 브리핑용 경량 모델 반환 (v2.0 Flash)"""
+        return config.GEMINI_FLASH_MODEL
 
     def _load_historical_lessons(self) -> str:
         """과거 복기를 통해 배운 교훈들을 로드하여 프롬프트에 삽입"""
@@ -355,8 +373,29 @@ JSON 형식으로 응답하세요."""
             )
             return self._parse_response(response.text)
         except Exception as e:
-            print(f"  ⚠ Bad Luck 분석 오류: {e}")
+            print(f"  [Error] Bad Luck 분석 오류: {e}")
             return {"is_bad_luck": False, "reason": str(e), "severity": 0}
+
+    def generate_briefing(self, prompt_text: str, system_prompt: str = "") -> str:
+        """
+        실시간 브리핑용 경량 모델을 사용한 간단한 텍스트 생성 전용 메서드.
+        """
+        if not self.client:
+            return "Gemini API 키가 설정되지 않았습니다."
+        
+        try:
+            response = self.client.models.generate_content(
+                model=self.fast_model,
+                contents=[prompt_text],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.7,
+                    max_output_tokens=2048
+                )
+            )
+            return response.text
+        except Exception as e:
+            return f"Gemini 브리핑 생성 중 오류 발생: {e}"
 
     def _parse_response(self, text: str) -> dict:
         """Gemini 응답에서 JSON 추출 및 기본 규격 보장"""

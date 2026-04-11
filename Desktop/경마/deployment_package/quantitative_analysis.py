@@ -521,14 +521,16 @@ class QuantitativeAnalyzer:
         valid = [a for a in analyses if not a.get("veto")]
         vetoed = [a for a in analyses if a.get("veto")]
 
-        valid.sort(key=lambda x: x["total_score"], reverse=True)
+        # [V12.4 Calibration] 다중 정렬 시스템 도입 (반성 및 교정)
+        # 동점자 발생 시 [종합 점수 -> 순수 속도 -> 방해 복원력] 순으로 정렬하여 축마 변별력 강화
+        valid.sort(key=lambda x: (x.get("total_score", 0), x.get("speed_score", 0), x.get("interference_score", 0)), reverse=True)
         for i, h in enumerate(valid, 1):
             h["rank"] = i
 
         for h in vetoed:
             h["rank"] = "VETO"
 
-        return valid + vetoed
+        return list(valid + vetoed)
 
     def generate_trio_picks(self, ranked: list[dict], entries_df=None) -> dict:
         """

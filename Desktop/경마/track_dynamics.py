@@ -29,8 +29,8 @@ class TrackDynamics:
             adj = -0.22 # [FIX] 다습 주로 가속도 최적화
         elif moisture < 20:
             adj = -0.15
-        else:
-            adj = 0.08  # 불량 주로 저항
+        else: # [CORE-FIX] 불량 주로(20%↑)는 모래가 다져져 극도로 빨라짐 (저항 0.08 -> 단축 -0.30)
+            adj = -0.30 
 
         # [2] 계절별 추가 보정 (봄/여름 대비)
         month = int(date[4:6]) if len(date) >= 6 else 0
@@ -54,20 +54,17 @@ class TrackDynamics:
         """
         주로의 '빠르기'를 0.0 ~ 2.0 사이의 점수로 정량화합니다.
         1.0: 표준(양호), 2.0: 최고속 주로, 0.5: 무거운 주로
-        
-        이 지수는 분석기에서 '선행마'의 유리함을 판단하는 가중치로 활용될 수 있습니다.
         """
         if moisture < 5:    return 0.8 # 건조 (무거움)
         if moisture < 10:   return 1.0 # 양호 (표준)
         if moisture < 15:   return 1.8 # 다습 (초고속 - 선행마 극유리)
         if moisture < 20:   return 1.5 # 포량 (고속)
-        return 0.6                     # 불량 (무거움/저항)
+        return 2.0                     # [CORE-FIX] 불량 (0.6 -> 2.0: 한국은 불량주로가 가장 빠름)
 
     @staticmethod
     def quantify_track_bias(moisture: float, meet: str = "1", date: str = "", scraper=None, limit_rc_no: str = None) -> dict:
         """
         주로 상태에 따른 '각질별 유리도'를 정량평가합니다.
-        [NEW] 당일 실시간 바이어스(Live Bias)를 통합하여 계산합니다.
         """
         # [NEW] 캐시 확인
         cache_key = f"{date}_{meet}_{limit_rc_no or 'all'}"
@@ -78,14 +75,16 @@ class TrackDynamics:
         
         # [1] 기존 함수율 기반 기본 바이어스
         front_bias = 0
-        if 10 <= moisture <= 16:
-            front_bias = 15  # 선행마 가산점
-        elif moisture >= 20:
-            front_bias = -5  # 불량 주로에서는 체력 소모 심함
+        if 10 <= moisture < 17:
+            front_bias = 15  # 다습/포량 선행마 가산점
+        elif moisture >= 17: # [CORE-FIX] 불량 주로 선행마 가중치 극대화 (-5 -> +20)
+            front_bias = 20  
             
         closer_bias = 0
-        if moisture < 6 or moisture >= 20:
+        if moisture < 6:
             closer_bias = 10
+        elif moisture >= 17: # [CORE-FIX] 불량 주로 추입마 패널티 강화 (10 -> -10)
+            closer_bias = -10
 
         # [2] 당일 실시간 바이어스 탐지 (오늘의 이전 경주 결과 분석)
         live_bias = {"front_bonus": 0, "closer_bonus": 0, "inner_bonus": 0, "outer_bonus": 0, "reasons": []}
@@ -105,8 +104,17 @@ class TrackDynamics:
             "inner_bonus": live_bias.get("inner_bonus", 0),
             "outer_bonus": live_bias.get("outer_bonus", 0),
             "description": live_bias.get("description", "기본 바이어스 적용"),
-            "live_reasons": live_bias.get("reasons", [])
+            "live_reasons": live_bias.get("reasons", []),
+            "winner_history": live_bias.get("winner_history", []) # [NEW] 오늘의 입상 흐름 전달
         }
+
+        # [MASTER SPEC] 구장별 지리적 특화 바이어스 강제 주입
+        if meet == "1": # 서울: 1~4번 게이트 'Golden Pass' 보너스 강화
+            res["inner_bonus"] = max(res["inner_bonus"], 12)
+            if moisture >= 12: res["front_bonus"] += 5 # 다습 이상의 서울은 안쪽 선행마가 절대적
+        elif meet == "3": # 부산: 긴 직선주로 외곽 탄력(Elasticity) 보너스
+            res["outer_bonus"] = max(res["outer_bonus"], 10)
+            if moisture < 8: res["closer_bonus"] += 8 # 건조한 부산은 외곽 추입 탄력이 더 잘 나옴
         
         # 캐시 저장
         TrackDynamics._bias_cache[cache_key] = res
@@ -151,30 +159,45 @@ class TrackDynamics:
             closer_bonus = 0
             style_desc = ""
             
+            winner_history = []
             if 'ord_start' in winners.columns:
+                for idx, winner in winners.iterrows():
+                    s1f_rank = int(winner.get('ord_start', 9))
+                    style = "선행" if s1f_rank <= 3 else ("선입" if s1f_rank <= 6 else "추입")
+                    winner_history.append(f"{winner.get('rcNo')}R: {winner.get('chulNo')}번({style})")
+                
                 avg_start_winner = winners['ord_start'].astype(int).mean()
                 if avg_start_winner <= 3.5:
-                    front_bonus = 12
+                    front_bonus = 15 # 보너 상향 (12 -> 15)
                     style_desc = "선행마 강세"
                 elif avg_start_winner >= 7.0:
-                    closer_bonus = 12
+                    closer_bonus = 15
                     style_desc = "추입마 강세"
 
             reasons = []
             if gate_desc: reasons.append(gate_desc)
             if style_desc: reasons.append(style_desc)
             
+            # [V12.4] 주로 인지 부조화 방지: 함수율에 따른 명시적 상태 추가
+            base_status = "표준 주로"
+            if moisture >= 15: base_status = "🔥 초고속 주로 (선행 절대 유리)"
+            elif moisture >= 10: base_status = "⚡ 고속 주로 (선행 유리)"
+            elif moisture < 5: base_status = "🧱 무거운 주로 (추입 유리)"
+
+            final_desc = f"{base_status} | 실시간: {', '.join(reasons)}" if reasons else base_status
+            
             return {
                 "front_bonus": front_bonus,
                 "closer_bonus": closer_bonus,
                 "inner_bonus": inner_bonus,
                 "outer_bonus": outer_bonus,
-                "description": f"실시간: {', '.join(reasons)}" if reasons else "당일 편차 적음",
-                "reasons": reasons
+                "description": final_desc,
+                "reasons": reasons,
+                "winner_history": winner_history # [NEW] 오늘의 입상 흐름 리스트
             }
         except Exception as e:
             print(f"  [Error] 실시간 바이어스 분석 실패: {e}")
-            return {}
+            return {"winner_history": []}
 
 if __name__ == "__main__":
     # 간단한 정량화 테스트

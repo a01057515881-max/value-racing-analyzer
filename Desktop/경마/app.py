@@ -12,6 +12,7 @@ from gemini_analyzer import GeminiAnalyzer
 from pattern_analyzer import PatternAnalyzer
 from storage_manager import StorageManager
 from review_manager import ReviewManager
+from telegram_bot import TelegramBot
 import socket
 
 # 페이지 설정 (반드시 최상단 Streamlit 명령어 - 다른 st. 명령보다 먼저 와야 함)
@@ -142,6 +143,21 @@ def check_password():
 # 인증 체크
 if not check_password():
     st.stop()
+
+# ─────────────────────────────────────────────
+# [NEW] 전략 연구소 (Strategic Lab) - 사이드바
+# ─────────────────────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔬 전략 연구소 (Strategic Lab)")
+lab_outer_anomalous = st.sidebar.toggle("🌌 [변칙적 외곽 전개 패턴] 적용", value=False, help="모래 반응에 예민한 마필이 외곽 주로 탄력을 활용하는 특수 시나리오를 분석 가중치에 수동 주입합니다.")
+if lab_outer_anomalous:
+    st.sidebar.info("💡 부산/서울 긴 직선주로 외곽 탄력 변수가 활성화되었습니다.")
+    st.session_state['lab_outer_anomalous'] = True
+else:
+    st.session_state['lab_outer_anomalous'] = False
+
+lab_monte_carlo = st.sidebar.toggle("🎲 초정밀 시뮬레이션 (10,000회)", value=True, help="기본 활성화됨. 연산량이 많아 저사양 모바일에서는 결과 출력까지 1~2초 더 소요될 수 있습니다.")
+st.sidebar.markdown("---")
 
 # ─────────────────────────────────────────────
 # [ULTRA-SAFE UI] 시스템 폰트 기반 프리미엄 스타일
@@ -503,28 +519,36 @@ def render_analysis_report(item, idx=0):
     # [NEW] 배당 등급 헤드라인 타이틀 (분석 최상단 핵심 UI)
     # 레이더 지수 → [저배당 주의 / 중배당 대비 / 고배당 대비] 세 단계 분류
     # ────────────────────────────────────────────────────────────────
-    _radar_index = radar_res.get('index', 0) if radar_res else 0
-    if _radar_index >= 65:
-        _hl_title  = "🚨 고배당 대비"
-        _hl_sub    = "AI가 강력한 복병마를 포착했습니다. 배당판이 요동치고 있습니다!"
+    # [U-PY-ALIGN] 파이썬 엔진(Radar)의 목소리를 최상단 타이틀에 우선 반영
+    # 임계값: 35(SLIGHT) / 50(MEDIUM) / 70(HIGH) 동기화
+    _radar_index = radar_res.get('radar_index', 0) if radar_res else 0
+    is_pre_market = radar_res.get('is_pre_market', False) if radar_res else False
+    
+    if _radar_index >= 70:
+        _hl_title  = "🚨 고배당 경보" if not is_pre_market else "🚨 고배당 전개"
+        _hl_sub    = "파이썬 엔진이 강력한 폭등 패턴을 포착했습니다. 배당판의 대격변이 예상됩니다."
         _hl_bg     = "linear-gradient(135deg, #b71c1c 0%, #d32f2f 100%)"
         _hl_border = "#ff8a80"
         _hl_badge_bg = "#ff5252"
-        _hl_badge_color = "#ffffff"
-    elif _radar_index >= 40:
-        _hl_title  = "⚡ 중배당 대비"
-        _hl_sub    = "복승 30배 내외의 이변 가능성이 포착되었습니다. 주력 공략 경주입니다."
-        _hl_bg     = "linear-gradient(135deg, #f57f17 0%, #ff8f00 100%)"
-        _hl_border = "#ffd740"
-        _hl_badge_bg = "#ffca28"
-        _hl_badge_color = "#000000"
+    elif _radar_index >= 50:
+        _hl_title  = "⚡ 중배당 주의" if not is_pre_market else "⚡ 변수 가능성"
+        _hl_sub    = "복승 30배 이상의 이변 구조가 형성되었습니다. 파이썬 엔진 권장 승부 구간입니다."
+        _hl_bg     = "linear-gradient(135deg, #e65100 0%, #fb8c00 100%)"
+        _hl_border = "#ffb74d"
+        _hl_badge_bg = "#ff9800"
+    elif _radar_index >= 35:
+        _hl_title  = "🛡️ 변수 포착"
+        _hl_sub    = "일부 마필의 전개 역전 가능성이 보입니다. 안정적인 배팅보다는 소액 변수 공략이 유리합니다."
+        _hl_bg     = "linear-gradient(135deg, #455a64 0%, #607d8b 100%)"
+        _hl_border = "#cfd8dc"
+        _hl_badge_bg = "#90a4ae"
     else:
         _hl_title  = "🛡️ 저배당 주의"
-        _hl_sub    = "인기마 쏠림 현상이 강합니다. 배당 메리트가 낮을 가능성이 높습니다."
+        _hl_sub    = "인기마 쏠림 현상이 강합니다. 무리한 배팅보다는 관망이 유리한 구간입니다."
         _hl_bg     = "linear-gradient(135deg, #37474f 0%, #546e7a 100%)"
         _hl_border = "#90a4ae"
         _hl_badge_bg = "#78909c"
-        _hl_badge_color = "#ffffff"
+    _hl_badge_color = "#ffffff"
 
     st.markdown(f"""
     <div style="
@@ -559,7 +583,7 @@ def render_analysis_report(item, idx=0):
                     <div style="color: #ffd700; font-size: 1.2rem; font-weight: 900; letter-spacing: 1px;">🎯 MEDIUM DIVIDEND RADAR</div>
                     <div style="background-color: {status_color}; color: {text_color}; padding: 4px 12px; border-radius: 20px; font-weight: bold; font-size: 0.85rem;">{status_str}</div>
                 </div>
-                <div style="color: #ffffff; font-size: 0.95rem; margin-bottom: 10px;">중배당 발생 지수: <span style="color: #ffd700; font-weight: bold; font-size: 1.1rem;">{radar_res['index']}%</span></div>
+                <div style="color: #ffffff; font-size: 0.95rem; margin-bottom: 10px;">중배당 발생 지수: <span style="color: #ffd700; font-weight: bold; font-size: 1.1rem;">{radar_res.get('radar_index', 0)}점</span></div>
                 {''.join([f'<div style="color: #e0e0e0; font-size: 0.85rem; margin-bottom: 3px;">• {r}</div>' for r in radar_res.get('reasons', [])])}
             </div>
             """, unsafe_allow_html=True)
@@ -680,7 +704,8 @@ def render_analysis_report(item, idx=0):
     
     # [NEW] 슈퍼 밸류(🚀) 타겟이 있는 경우 뱃지 강조
     has_super_value = any(h.get('is_super_value') for h in result_list)
-    if has_super_value:
+    is_active_bet = "관망" not in clean_badge and "패스" not in clean_badge and "휴식" not in clean_badge
+    if has_super_value and is_active_bet:
         clean_badge = f"🚀 [High-Value Strong Axis] {clean_badge}"
         badge_color = "#FFF9C4" # Gold focus
     
@@ -861,6 +886,42 @@ def render_analysis_report(item, idx=0):
                     </div>
                     """, unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
+        
+        # [NEW] AI 배팅 비중 제안 (100단위 가중치)
+        if result_list:
+            try:
+                from quantitative_analysis import QuantitativeAnalyzer
+                _analyzer_pre = QuantitativeAnalyzer()
+                dist = _analyzer_pre.calculate_betting_distribution(result_list)
+                
+                st.markdown("#### ⚖️ AI 배팅 비중 제안 (100단위 가중치)")
+                st.caption("🤖 AI 승률 지수를 기반으로 산출된 권장 베팅 강도입니다. (조합별 총합 100%)")
+                
+                d_col1, d_col2 = st.columns(2)
+                with d_col1:
+                    with st.container(border=True):
+                        st.markdown("<div style='color: #448aff; font-weight: bold; margin-bottom: 8px;'>■ 복승식(Quinella) 추천 비중</div>", unsafe_allow_html=True)
+                        for d in dist['quinella']:
+                            st.markdown(f"""
+                            <div style="margin-bottom: 12px; border-bottom: 1px dashed #444; padding-bottom: 8px;">
+                                <span style="font-size: 1.3rem; font-weight: 900; color: #ff5252;">{d['combination']}</span> 
+                                <span style="float: right; font-size: 1.1rem; font-weight: bold; color: #ffffff;">{d['units']}%</span>
+                                <div style="font-size: 0.9rem; color: #bdbdbd; margin-top: 2px;">🚀 {d['names']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                with d_col2:
+                    with st.container(border=True):
+                        st.markdown("<div style='color: #69f0ae; font-weight: bold; margin-bottom: 8px;'>■ 삼복승식(Trio) 추천 비중</div>", unsafe_allow_html=True)
+                        for d in dist['trio']:
+                            st.markdown(f"""
+                            <div style="margin-bottom: 12px; border-bottom: 1px dashed #444; padding-bottom: 8px;">
+                                <span style="font-size: 1.3rem; font-weight: 900; color: #00e676;">{d['combination']}</span> 
+                                <span style="float: right; font-size: 1.1rem; font-weight: bold; color: #ffffff;">{d['units']}%</span>
+                                <div style="font-size: 0.9rem; color: #bdbdbd; margin-top: 2px;">🚀 {d['names']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+            except Exception as e:
+                st.info("실시간 승률 지수 기반 비중 산출 중...")
 
     # [5] 핵심 베팅 축마 선정 (2단 카드 구성)
     st.markdown("### 핵심 베팅 축마 선정")
@@ -947,7 +1008,24 @@ def render_analysis_report(item, idx=0):
     if result_list:
         st.markdown("---")
         st.markdown("### 📊 정량/정성 통합 분석 마표")
-        display_cleaned_dataframe(pd.DataFrame(result_list))
+        
+        # [MASTER SPEC] 신규 지표 한글 출력 지원을 위해 컬럼 순서 재배치
+        df_display = pd.DataFrame(result_list)
+        cols_to_show = [
+            'rank', 'gate_no', 'horse_name', 'win_prob', 'quinella_prob', 
+            '보정속도(ASI)', '뒷심탄력(LFC)', '종합전력(TPS)', '반란지수(RI)', 'total_score'
+        ]
+        # 존재하는 컬럼만 필터링
+        actual_cols = [c for c in cols_to_show if c in df_display.columns]
+        df_final = df_display[actual_cols].copy()
+        
+        # 컬럼명 한글 가독성 강화
+        df_final.columns = [
+            '순위', '번', '마명', '승률(%)', '복승(%)', 
+            '보정속도(ASI)', '뒷심탄력(LFC)', '종합전력(TPS)', '반란지수(RI)', '종합점수'
+        ]
+        
+        display_cleaned_dataframe(df_final)
 
     # 영역 종료
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1097,6 +1175,96 @@ def load_entries(date, meet):
 def load_training(date, meet):
     scraper = KRAScraper()
     return scraper.fetch_training_for_week(date, meet)
+
+def send_telegram_analysis(race_date, meet_code, r_no, data):
+    """분석 데이터를 텔레그램으로 자동 발송합니다."""
+    try:
+        tb = TelegramBot()
+        meet_name = {"1": "서울", "2": "제주", "3": "부경"}.get(str(meet_code), str(meet_code))
+        
+        # 기수/조교사 정보 매핑 (ranked 리스트에서 추출)
+        ranked = data.get('result_list', [])
+        
+        # 메인 헤드라인 결정
+        radar = data.get('medium_dividend_radar', {})
+        radar_idx = radar.get('index', 0) if radar else 0
+        
+        headline = "🛡️ 저배당 주의"
+        if radar_idx >= 65: headline = "🚨 고배당 대비"
+        elif radar_idx >= 40: headline = "⚡ 중배당 대비"
+        
+        # 핵심 요약
+        strategy = data.get('strategy_badge', '분류 중')
+        # 불필요한 문구 제거
+        strategy = strategy.replace("배당 확인 불가 (정보 부족) / ", "").replace("배당 미수집 (직전 분석용) / ", "")
+        
+        guide = data.get('bet_guide', '')
+        
+        # 핵심 압축 마번
+        t_picks = data.get('tactical_picks', {})
+        axis = t_picks.get('axis', {}).get('gate_no', '?')
+        hold = t_picks.get('holding', {}).get('gate_no', '?')
+        box_5 = " - ".join([str(h.get('gate_no', h.get('hrNo', '?'))) for h in ranked[:5]])
+        
+        # AI 코멘트 (Gemini 결과가 있을 때만)
+        comment = data.get('gemini_comment', '')
+        if comment == "AI 분석 미실행": comment = ""
+        
+        # 메시지 구성 (Markdown)
+        msg = f"🏇 *{meet_name} {r_no}R AI 분석 리포트* 🏇\n"
+        msg += f"📅 일시: {race_date} | {headline} ({radar_idx}점)\n"
+        msg += f"-----------------------------------------\n"
+        msg += f"🏆 *전략 등급*: {strategy}\n"
+        msg += f"🔥 *승부 추천*: {axis} 놓고 - {hold} ({box_5} 박스)\n"
+        
+        if guide:
+            msg += f"📢 *권장 가이드*: {guide}\n"
+            
+        if comment:
+            # 외계어 정화
+            clean_comment = clean_ai_text(comment)
+            msg += f"\n🎬 *AI 전략 총평*:\n{clean_comment}\n"
+            
+        # [NEW] 제미나이 정성 분석 결과 (강선축마, 복병마, 불운마) 추가
+        strongs = data.get('strong_leader', []) + data.get('surviving_leader', [])
+        darks = data.get('dark_horses', [])
+        unluckys = data.get('unlucky_watch', [])
+        
+        if strongs:
+            msg += f"\n⭐ *AI 강선축마*:\n"
+            for h in strongs[:2]:
+                h_info = h.get('horse', h) if isinstance(h, dict) else h
+                h_reason = h.get('reason', '') if isinstance(h, dict) else ''
+                msg += f"- {h_info}: {h_reason}\n"
+        
+        if darks:
+            msg += f"\n🎯 *AI 레이더 복병*:\n"
+            for h in darks[:2]:
+                h_info = h.get('horse', h) if isinstance(h, dict) else h
+                h_reason = h.get('reason', '') if isinstance(h, dict) else ''
+                msg += f"- {h_info}: {h_reason}\n"
+                
+        if unluckys:
+            msg += f"\n🚑 *불운마 모니터링*:\n"
+            for h in unluckys[:2]:
+                h_info = h.get('horse', h) if isinstance(h, dict) else h
+                h_reason = h.get('reason', '') if isinstance(h, dict) else ''
+                msg += f"- {h_info}: {h_reason}\n"
+            
+        msg += f"-----------------------------------------\n"
+        msg += f"📊 *상세 순위 (TOP 5)*:\n"
+        for i, h in enumerate(ranked[:5], 1):
+            h_name = h.get('horse_name', '?').split('(')[0].strip()
+            # 뱃지 제거 (이미지용 특수문자 등)
+            h_name = h_name.replace("🎯 ", "").replace("🛡️ ", "").replace("🚀 ", "")
+            msg += f"{i}위. [{h.get('gate_no', '?')}] {h_name} ({h.get('win_prob', 0)}%)\n"
+            
+        msg += f"\n🔗 [모바일 분석기 확인](http://{get_local_ip()}:8501)"
+        
+        return tb.send_message(msg)
+    except Exception as e:
+        print(f"Telegram Send Error: {e}")
+        return False
 
 # 제목
 st.title("🐎 KRA AI 경마 분석기")
@@ -1486,7 +1654,7 @@ with st.sidebar.expander("🤖 AI 모델 자율 진화", expanded=True):
 st.sidebar.markdown("---")
 
 # 경주 목록 (탭 표시용)
-race_numbers = [str(i) for i in range(1, 13)]
+race_numbers = [str(i) for i in range(1, 18)]
 
 # ─────────────────────────────────────
 
@@ -1508,7 +1676,7 @@ with col_prev:
 with col_next:
     if st.button("다음 ▶", key="btn_next_race"):
         cur = int(st.session_state.get('race_no', '1'))
-        if cur < 12:
+        if cur < 17:
             st.session_state['race_no'] = str(cur + 1)
             st.session_state['scraped_entries'] = None
             st.rerun()
@@ -1995,7 +2163,8 @@ elif menu_selection == "🏇 분석":
                                                      track_bias=current_track_bias,
                                                      race_context=race_ctx,
                                                      sire=str(row.get('sireNm', '')),
-                                                     dam_sire=str(row.get('damSireNm', '')))
+                                                     dam_sire=str(row.get('damSireNm', '')),
+                                                     lab_outer_anomalous=st.session_state.get('lab_outer_anomalous', False))
                         res['jkName'] = jk_name
                         res['hrNo'] = hr_no
                         res['chulNo'] = row.get('chulNo', '') # [FIX] Save chulNo to cache
@@ -2081,10 +2250,42 @@ elif menu_selection == "🏇 분석":
                             
                             # 규칙 1위는 +15%, 2~3위는 +10% 앙상블 대우
                             rule_boost = 15.0 if rule_rank == 1 else (10.0 if rule_rank <= 3 else 0.0)
-                            r['_ensemble_score'] = (wp * 0.6) + (ts * 0.4) + rule_boost
+                            
+                            # [NEW] 시장 인기 1위마 (Consensus Axis) 보호 로직
+                            # 단승 1.5배~2.5배인 인기 1위마가 AI 순위에서 밀려나는 'Favorite Blindness' 방어
+                            consensus_boost = 0.0
+                            m_rank = r.get('market_rank', 99)
+                            m_odds = float(r.get('market_odds', 99.0))
+                            if m_rank == 1 and m_odds <= 2.8:
+                                # [V12.3 Audit] 정량 엔진 보너스(+1.8 Z)와 합산되므로 부스트 소폭 조정 (20.0 -> 15.0)
+                                consensus_boost = 15.0 
+                                r['analysis_notes'].append(f"🛡️ [Consensus Protect] 인기 1위 {m_odds}배 - 방어적 축마로 보호")
+                            
+                            r['_ensemble_score'] = (wp * 0.6) + (ts * 0.4) + rule_boost + consensus_boost
                             
                         ranked.sort(key=lambda x: x.get('_ensemble_score', 0), reverse=True)
                         
+                        # [NEW V12] 중배당 레이더 미리 계산 (배팅 전략 보정용)
+                        radar_curr = None
+                        if hasattr(analyzer, 'pa'):
+                            try:
+                                radar_curr = analyzer.pa.detect_medium_dividend_opportunity(
+                                    [{
+                                        'name': a['horse_name'], 
+                                        'gate': a['gate_no'], 
+                                        'winOdds': a.get('market_odds', 10.0), 
+                                        's1f_avg': a.get('s1f_avg', 0), 
+                                        'is_unlucky': a.get('is_unlucky', False), 
+                                        'is_interest': a.get('is_interest', False),
+                                        'is_maiden': a.get('is_maiden', False),
+                                        'days_since_last_race': a.get('days_since_last_race', 0),
+                                        'synergy_bonus': a.get('synergy_bonus', 0)
+                                    } for a in analyses],
+                                    {'pace_pressure': race_context.get('pace_pressure', 'Normal')},
+                                    meet_code=str(meet_code)
+                                )
+                            except: pass
+
                         # [NEW] 최종 앙상블 순위 기반 전술 및 뱃지 재동기화 (Consistency Fix)
                         # Benter 및 Ensemble 가산점이 반영된 마필들이 전술 추천(★축 등)에 즉시 반영되도록 함
                         final_eval = analyzer.evaluate_strategy(ranked, meet_code=meet_code, 
@@ -2092,7 +2293,8 @@ elif menu_selection == "🏇 분석":
                                                                 confusion_flag=race_context.get('confusion_flag', ''),
                                                                 target_info=race_context.get('advanced_target'),
                                                                 dist=int(float(st.session_state.get('current_dist', 1200))),
-                                                                grade=st.session_state.get('current_grade', 'Unknown'))
+                                                                grade=st.session_state.get('current_grade', 'Unknown'),
+                                                                radar_info=radar_curr)
                         
                         # race_context 데이터 동기화 (저장 및 UI 노출용)
                         race_context['tactical_picks'] = final_eval.get('tactical_picks', {})
@@ -2140,20 +2342,7 @@ elif menu_selection == "🏇 분석":
                         "is_gold_target": is_gold,
                         "bet_recommendation": bet_logic.get('bet', False),
                         "skip_reason": bet_logic.get('skip_reason', ""),
-                        "medium_dividend_radar": analyzer.pa.detect_medium_dividend_opportunity(
-                            [{
-                                'name': a['horse_name'], 
-                                'gate': a['gate_no'], 
-                                'winOdds': a.get('market_odds', 10.0), 
-                                's1f_avg': a.get('s1f_avg', 0), 
-                                'is_unlucky': a.get('is_unlucky', False), 
-                                'is_interest': a.get('is_interest', False),
-                                'is_maiden': a.get('is_maiden', False),
-                                'days_since_last_race': a.get('days_since_last_race', 0),
-                                'synergy_bonus': a.get('synergy_bonus', 0)
-                            } for a in analyses],
-                            {'pace_pressure': race_context.get('pace_pressure', 'Normal')}
-                        ) if hasattr(analyzer, 'pa') else None,
+                        "medium_dividend_radar": radar_curr,
                         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     StorageManager.save_analysis(race_date, meet_code, r_no, save_data)
@@ -2348,7 +2537,14 @@ elif menu_selection == "🏇 분석":
                         value_str = ", ".join(value_horses) if value_horses else "추출 실패(전체 혼전)"
                         
                         st.success(f"💎 **[초정밀 황금 가치마 포착]** 상대적 극강 가치마(마번: **{value_str}**) + 전술적 맥점 결합!")
-                        st.info(f"💡 **전술 가이드**: 배당률 거품이 낀 인기 1,2위를 과감히 배제하고, AI가 발굴한 **{value_str}번**을 축으로 삼복승 고배당을 노리십시오.")
+                        
+                        # [REFINED] 인기 1위마 배제 로직 순화: 무조건 배제가 아니라, 인기마를 축으로 세우고 가치마를 붙이는 전략 제시
+                        top1 = ranked[0]
+                        top1_odds = float(top1.get('market_odds', 99.0))
+                        if top1_odds <= 2.8:
+                            st.info(f"💡 **전술 가이드**: 시장 인기 1위(**{top1.get('gate_no')}번**)가 매우 강력합니다. 이를 **[방어용 축]**으로 삼고, AI가 발굴한 가치마 **{value_str}번**을 후착/복병으로 붙여 삼복승 중배당을 노리십시오.")
+                        else:
+                            st.info(f"💡 **전술 가이드**: 배당률 거품이 낀 인기마를 방어적으로 운용하고, AI가 발굴한 **{value_str}번**을 중심으로 삼복승 고배당 혼전을 공략하십시오.")
 
                     # [FIX] 관망 캐시 무시: 현재 AI 엔진 기준 is_golden_value 면 무조건 정예 등급으로 렌더링 강제 전환
                     # (이미 분석된 옛날 데이터가 '관망'을 잡고 있는 것 무력화)
@@ -2443,9 +2639,17 @@ elif menu_selection == "🏇 분석":
                                     # 분석 결과 자동 저장
                                     existing_rec = StorageManager.load_analysis(race_date, meet_code, r_no)
                                     if existing_rec and isinstance(existing_rec, dict):
+                                        # [NEW] 상세 정성 분석 결과(강선축마/복병마/코멘트) 전체를 저장하여 텔레그램 발송 시 활용
                                         existing_rec['gemini_comment'] = g_res.get('analysis', g_res.get('final_comment', 'AI 분석 완료'))
+                                        existing_rec['strong_leader'] = g_res.get('strong_leader', [])
+                                        existing_rec['surviving_leader'] = g_res.get('surviving_leader', [])
+                                        existing_rec['dark_horses'] = g_res.get('dark_horses', [])
+                                        existing_rec['unlucky_watch'] = g_res.get('unlucky_watch', [])
                                         existing_rec['model_used'] = g_res.get('model_used', 'Gemini Pro' if do_pro else 'Gemini Flash')
                                         StorageManager.save_analysis(race_date, meet_code, r_no, existing_rec)
+                                        
+                                        # [NEW] AI 분석 완료 후 텔레그램 자동 발송 (최종 리포트)
+                                        send_telegram_analysis(race_date, meet_code, r_no, existing_rec)
                                     st.success(f"✅ {'Pro' if do_pro else 'Flash'} 분석 완료!")
                                 elif g_res and isinstance(g_res, dict) and "error" in g_res:
                                     st.error(f"❌ AI 분석 실패: {g_res['error']}")

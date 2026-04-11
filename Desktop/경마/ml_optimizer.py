@@ -84,79 +84,66 @@ class MLOptimizer:
         # [V2 개선] EWMA 람다 참조 (quantitative_analysis.py와 동일한 값)
         _SIM_LAMBDA = 0.75
 
+        # [V2 개선] 실전 엔진 인스턴스 생성 (루프 외부가 아닌 내부에서 가중치 주입)
         for idx, wg in enumerate(weight_grids):
             total_earned = 0.0
             total_bet = 0.0
             hit_count = 0
             medium_div_hits = 0
             
+            # 가중치가 주입된 실전 엔진 생성
+            analyzer = QuantitativeAnalyzer(override_weights=wg)
+            
             for race in sample_races:
                 entries = race["entries"]
                 meet = str(race.get("meet", "1"))
-                predictions = []
-                # [P5] meet 코드 정규화 — Brain #A-03 경보 해소
-                # API가 "01", "3.0" 등으로 반환해도 안전하게 매칭
-                meet_norm = str(meet).strip().split(".")[0].lstrip("0") or "1"
-                if meet_norm == "1": w_s = wg["w_speed_seoul"]
-                elif meet_norm == "2": w_s = wg["w_speed_jeju"]
-                else: w_s = wg["w_speed_busan"]
+                sim_results = []
                 
+                # 1. 실전과 동일한 방식으로 모든 마필 분석
                 for e in entries:
                     try:
+                        horse_name = e.get("hrName", "?")
                         real_ord = int(e.get("ord", 99))
-                        win_odds = float(e.get("winOdds", 10.0) or 10.0)
+                        win_odds = float(e.get("win_odds", e.get("winOdds", 10.0)) or 10.0)
 
-                        # [V2 개선] 단순 S1F/G1F 관대 → 10개 핵심 Feature
-                        s1f = float(e.get("s1f", 14.0) or 14.0)
-                        g1f = float(e.get("g1f", 13.5) or 13.5)
-
-                        # 1. EWMA 속도 점수 (단순 2전 평균 대신, 최신 경주 가중치 3배)
-                        # 실전에서는 EWMA로 계산 중이라 여기서도 동일 단순 시뮬로 감전
-                        speed_factor = (20 - s1f) * (1 - w_s) + (20 - g1f) * w_s
-
-                        # 2. 입상 일관성 (최근 3경주 입상 여부)
-                        recent_ord = int(e.get("ord", 99))
-                        cons_val = 5.0 if recent_ord <= 3 else 0.0
-
-                        # 3. 배당 로그 변환 (V2: 초강축 편향 방지 위해 log 적용)
-                        import math
-                        log_odds = math.log(max(win_odds, 1.01)) if win_odds > 0 else 0
-                        mkt_factor = min(log_odds * 1.0, 3.0)  # 최대 3점 캡 (기존 기반 18점 방지)
-
-                        # 4. 출발문 기준 점수 (V2)
-                        gate = int(e.get("chulNo", e.get("gate", 5)))
-                        gate_factor = max(0, (8 - gate) * 0.3) if gate <= 4 else 0  # 안쪽 유리
-
-                        # 5. 휴양기간 폈널티 (V2)
-                        days = int(e.get("days_since_last", 30))
-                        rest_factor = -2.0 if days > 180 else (1.5 if 45 <= days <= 120 else 0)
-
-                        # 6. 승급전 폈널티 (V2)
-                        promo_factor = -2.0 if e.get("is_promotion") else 0
-
-                        # 종합 점수: speed(70%) + 시장(10%) + 게이트(5%) + 휴양(10%) + 승급(5%)
-                        score = (
-                            speed_factor * 0.70 +
-                            cons_val * wg["w_consistency"] +
-                            mkt_factor * 0.10 +
-                            gate_factor * 0.05 +
-                            rest_factor * 0.10 +
-                            promo_factor * 0.05
+                        # 실전 analyzer_horse 형태에 맞춰 데이터 재구성
+                        history = []
+                        for h_idx in range(1, 6):
+                            s1f_val = e.get(f"s1f_{h_idx}")
+                            if s1f_val is not None:
+                                history.append({
+                                    "s1f": float(s1f_val),
+                                    "g1f": float(e.get(f"g1f_{h_idx}", 13.5)),
+                                    "ord": int(e.get(f"ord_{h_idx}", 99)),
+                                    "pos": str(e.get(f"pos_{h_idx}", ""))
+                                })
+                        
+                        weight = float(e.get("wgHr", e.get("weight", 500)))
+                        
+                        analysis = analyzer.analyze_horse(
+                            horse_name, history, [], weight, 0, 
+                            meet_code=str(meet)
                         )
-                        predictions.append({"score": score, "real_ord": real_ord, "winOdds": win_odds})
+                        # 시뮬레이션을 위해 실제 성적과 배당 정보를 결과에 심어둠
+                        analysis["real_ord"] = real_ord
+                        analysis["win_odds"] = win_odds
+                        sim_results.append(analysis)
                     except: continue
                 
-                if predictions:
-                    predictions.sort(key=lambda x: x["score"], reverse=True)
-                    # 시뮬레이션: Top 3 박스권 적중 여부
-                    top3 = predictions[:3]
+                # 2. 실전 [3단계 다중 정렬 시스템] 적용 (모든 말 분석 후 1회 수행)
+                if sim_results:
+                    ranked = analyzer.rank_horses(sim_results)
+                    if isinstance(ranked, dict) and "ranked_list" in ranked:
+                        ranked = ranked["ranked_list"]
+
+                    top5 = ranked[:5]
                     total_bet += 10.0
-                    winner = next((p for p in top3 if p["real_ord"] == 1), None)
+                    winner = next((p for p in top5 if p.get("real_ord") == 1), None)
                     if winner:
                         hit_count += 1
-                        total_earned += winner["winOdds"]
-                    if winner and winner["winOdds"] >= 30.0:
-                        medium_div_hits += 1
+                        total_earned += winner.get("win_odds", 0)
+                        if winner.get("win_odds", 0) >= 30.0:
+                            medium_div_hits += 1
             
             # [P4] 목적함수 재설계 — Shield #C-01/#C-02 경보 해소
             # 구버전: combined = hit*0.5 + roi*0.3 + medium_div*0.4 (실효 40% 과가중)

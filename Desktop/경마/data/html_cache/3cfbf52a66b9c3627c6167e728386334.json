@@ -1,0 +1,14 @@
+{
+  "timestamp": 1775884436.9583807,
+  "url": "https://apis.data.go.kr/B551015/API18_1/dailyTraining_1",
+  "params": {
+    "meet": "3",
+    "tr_date": "20250401",
+    "serviceKey": "ae10bda1d61dea0488b1968dc90ea94a14c85efc006b45646b17eb695332116c",
+    "_type": "json",
+    "numOfRows": "100",
+    "pageNo": "1"
+  },
+  "content": "{\"response\":{\"header\":{\"resultCode\":\"00\",\"resultMsg\":\"NORMAL SERVICE.\"},\"body\":{\"items\":\"\",\"numOfRows\":100,\"pageNo\":1,\"totalCount\":0}}}",
+  "encoding": "cp949"
+}

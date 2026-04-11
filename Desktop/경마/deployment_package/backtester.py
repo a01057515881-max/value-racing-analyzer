@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.progress import track
 from rich.table import Table
 import numpy as np # Added based on user's request, assuming 'from rich.table import numpy as np' was a typo.
+import traceback # [NEW] For detailed error tracing
 
 import config
 from kra_scraper import KRAScraper
@@ -220,65 +221,85 @@ class Backtester:
                             "report": str(row["steward_report_1"])
                         })
 
-                    analysis = analyzer.analyze_horse(
-                        horse_name, history, train_recs, weight, weight_diff,
-                        steward_reports=st_reports
-                    )
-                    
-                    # [NEW] AI Qualitative Check (Gemini Flash)
-                    # If quantitative analysis flags it as 'Dark Horse' OR if there are steward reports
-                    ai_bad_luck = False
-                    ai_reason = ""
-                    
-                    if st_reports and self.ai_analyst:
-                        # Only check if potential dark horse or just check all with reports?
-                        # To save cost/time, maybe check only if 'interference_count' > 0 from keyword search?
-                        # Or check all to find missed cases? User wants "Flash" for backtesting, so let's try.
-                        # For speed, let's check if keyword search found SOMETHING or if we want to be thorough.
-                        # Let's check top 1 report.
+                    try:
+                        analysis = analyzer.analyze_horse(
+                            horse_name, history, train_recs, weight, weight_diff,
+                            steward_reports=st_reports
+                        )
                         
-                        # [Optimization] Only call AI if keyword search found something OR randomly (to test)
-                        # For now, strictly verify Keyword Search results + uncover false negatives?
-                        # Let's just run it for all with reports for this verification run.
+                        # [NEW] AI Qualitative Check (Gemini Flash)
+                        # If quantitative analysis flags it as 'Dark Horse' OR if there are steward reports
+                        ai_bad_luck = False
+                        ai_reason = ""
                         
-                        rpt_text = st_reports[0]['report']
-                        ai_result = self.ai_analyst.analyze_bad_luck(horse_name, rpt_text)
+                        if st_reports and len(st_reports) > 0 and self.ai_analyst:
+                            rpt_text = st_reports[0].get('report', '')
+                            if rpt_text:
+                                ai_result = self.ai_analyst.analyze_bad_luck(horse_name, rpt_text)
+                                
+                                # Parse simplified result (assuming string provided by my mock or actual API)
+                                if "true" in str(ai_result).lower():
+                                    ai_bad_luck = True
+                                    ai_reason = f"[AI] {ai_result}"[:100]
+
+                        # Merge AI Result
+                        if ai_bad_luck:
+                            analysis['is_dark_horse'] = True # [FIX] Consistent key name
+                            analysis['dark_horse_reason'] = f"{analysis.get('dark_horse_reason','') or ''} | {ai_reason}".strip(' | ')
+                            analysis['total_score'] += 10.0 # [FIX] Apply AI bonus directly to total_score
+                            analysis['interference_score'] += 20 # Bonus for AI confirmed bad luck
                         
-                        # Parse simplified result (assuming string provided by my mock or actual API)
-                        if "true" in str(ai_result).lower():
-                            ai_bad_luck = True
-                            ai_reason = f"[AI] {ai_result}"[:100]
+                        # [Debug] 리포트 전달 확인
+                        if st_reports and len(st_reports) > 0:
+                            print(f"  [DEBUG] {horse_name} has {len(st_reports)} reports: {str(st_reports[0].get('report',''))[:50]}...")
 
-                    analysis = analyzer.analyze_horse(
-                        horse_name, history, train_recs, weight, weight_diff,
-                        steward_reports=st_reports
-                    )
-                    
-                    # Merge AI Result
-                    if ai_bad_luck:
-                        analysis['dark_horse'] = True
-                        analysis['dark_horse_reason'] = f"{analysis.get('dark_horse_reason','')} | {ai_reason}"
-                        analysis['interference_score'] += 20 # Bonus for AI confirmed bad luck
-                    
-                    # [Debug] 리포트 전달 확인
-                    if st_reports:
-                        print(f"  [DEBUG] {horse_name} has {len(st_reports)} reports: {st_reports[0]['report'][:50]}...")
+                        # [Debug] 불운마 출력
+                        if analysis.get("is_dark_horse") and analysis.get("interference_count", 0) > 0:
+                            print(f"  [BadLuck] {horse_name} (R{row.get('rcNo', '?')}) - {analysis.get('dark_horse_reason','')}")
 
-                    # [Debug] 불운마 출력
-                    if analysis.get("dark_horse") and analysis.get("interference_count", 0) > 0:
-                        print(f"  [BadLuck] {horse_name} (R{row['rcNo']}) - {analysis['dark_horse_reason']}")
-
-                    sim_results.append(analysis)
+                        sim_results.append(analysis)
+                    except Exception as e:
+                        print(f"  [Error] Failed to analyze {horse_name}: {e}")
+                        traceback.print_exc()
+                        continue
 
                 # 순위 산정
-                ranked = analyzer.rank_horses(sim_results)
+                raw_ranked = analyzer.rank_horses(sim_results)
                 
+                # [SAFETY] 데이터 타입 강제 검증 (KeyError: 0 방지)
+                # QuantitativeAnalyzer 버전(루트/패키지)에 따라 리스트 또는 딕셔너리가 반환될 수 있음
+                if isinstance(raw_ranked, list):
+                    ranked = raw_ranked
+                elif isinstance(raw_ranked, dict) and "ranked_list" in raw_ranked:
+                    ranked = raw_ranked["ranked_list"]
+                elif hasattr(raw_ranked, "to_dict"): # DataFrame/Series case
+                    ranked = raw_ranked.to_dict('records')
+                else:
+                    # 예상치 못한 타입일 경우 진단 로그 출력 후 강제 변환
+                    try:
+                        ranked = list(raw_ranked)
+                    except:
+                        print(f"  [CRITICAL] Unknown ranked type: {type(raw_ranked)}")
+                        ranked = []
+
                 # ---------------------------------------------------------
                 # [Strategy] 1축 - 2도전 - 3복병 (총 6두 선정)
                 # ---------------------------------------------------------
+                # [SAFETY] 분석 결과가 없는 경우 해당 경주 건너뜀
+                if not ranked:
+                    print(f"  [Warning] No horses passed criteria for Race {race_no}. Skipping.")
+                    continue
+
                 # 1. 축마 (Axis): 종합 점수 1위
-                axis_horse = ranked[0] # Best Score
-                is_veto = axis_horse["veto"]
+                try:
+                    axis_horse = ranked[0] # Best Score
+                except (IndexError, KeyError) as e:
+                    print(f"  [CRITICAL ERROR] Failed to access index 0 of {type(ranked)} 'ranked'.")
+                    print(f"  [DEBUG] Raw return type: {type(raw_ranked)}")
+                    print(f"  [DEBUG] Ranked content (first 200 chars): {str(ranked)[:200]}")
+                    raise e
+                
+                is_veto = axis_horse.get("veto", False)
                 
                 # 나머지 마필 리스트
                 others = ranked[1:]

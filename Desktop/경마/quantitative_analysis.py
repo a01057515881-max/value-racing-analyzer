@@ -79,14 +79,15 @@ class QuantitativeAnalyzer:
             except: pass
 
         # [NEW] 머신러닝 최적화 가중치 로드
-        self.ml_weights = {}
-        ml_path = os.path.join(os.path.dirname(__file__), "data", "optimized_weights.json")
-        if os.path.exists(ml_path):
-            try:
-                import json
-                with open(ml_path, "r", encoding="utf-8") as f:
-                    self.ml_weights = json.load(f)
-            except: pass
+        self.ml_weights = kwargs.get('override_weights', {})
+        if not self.ml_weights:
+            ml_path = os.path.join(os.path.dirname(__file__), "data", "optimized_weights.json")
+            if os.path.exists(ml_path):
+                try:
+                    import json
+                    with open(ml_path, "r", encoding="utf-8") as f:
+                        self.ml_weights = json.load(f)
+                except: pass
 
     def apply_autonomous_patterns(self, jk_name: str, tr_name: str, horse_name: str) -> tuple[float, list]:
         """
@@ -214,6 +215,10 @@ class QuantitativeAnalyzer:
         
         # [ENHANCED] 주로 및 계절 보정
         track_adj = self._get_track_adjustment(moisture, meet, is_s1f, date=date)
+        
+        # [V12.2] 함수율 15% 이상(포화/불량) '빠른 주로' 보정 강화 (-1.25초)
+        if moisture >= 15:
+            track_adj -= 1.25
         
         # [NEW] 오버페이스(Overpace) 위험 감지 로직용 기초 데이터 반환
         return round(time_val - correction + track_adj, 2)
@@ -496,7 +501,7 @@ class QuantitativeAnalyzer:
 
         recent = race_history[:self.recent_n]
         # [NEW] 마명 추출 로직 (calc_speed_score 파라미터 우선 사용)
-        if horse_name == "Unknown" and recent:
+        if horse_name == "Unknown" and recent and len(recent) > 0:
              horse_name = recent[0].get("hrName", "Unknown")
 
         s1f_raw_vals = []
@@ -584,22 +589,34 @@ class QuantitativeAnalyzer:
             w_g1f = round(1.0 - w_s1f, 2)
 
         total_meta_bonus = self._get_unlucky_bonus(horse_name) + self._get_interest_horse_bonus(horse_name)
-        ai_p = self._apply_ai_winning_patterns(horse_name, race_history, moisture, gate_no, date, meet_code)
-        auto_p = self._apply_autonomous_patterns(horse_name, recent[0].get("jkName", ""), recent[0].get("trName", ""), gate_no, meet_code)
-
-        ai_notes = ai_p.get("notes", []) + auto_p.get("notes", [])
+        
+        ai_p = {"bonus": 0.0, "penalty": 0.0, "notes": []}
+        auto_p = {"bonus": 0.0, "penalty": 0.0, "notes": []}
+        ai_notes = []
+        
+        if recent and len(recent) > 0:
+            ai_p = self._apply_ai_winning_patterns(horse_name, race_history, moisture, gate_no, date, meet_code)
+            # [FIX] Safer access to recent[0] for new horses
+            jk_n = recent[0].get("jkName", "") if hasattr(recent[0], "get") else ""
+            tr_n = recent[0].get("trName", "") if hasattr(recent[0], "get") else ""
+            auto_p = self._apply_autonomous_patterns(horse_name, jk_n, tr_n, gate_no, meet_code)
+            ai_notes = ai_p.get("notes", []) + auto_p.get("notes", [])
         # [P3] AI 패턴 보너스 총합 상한(cap) 적용 — Brain #A-04 경보 해소
         # 14개 패턴이 동시 충족돼도 이론상 +100점 초과 방지
         # Shield: 보너스 인플레이션 억제 → 저배당 강마가 점수 역전 방지
         _AI_BONUS_CAP = 30.0
-        raw_ai_bonus = ai_p["bonus"] - ai_p["penalty"] + auto_p["bonus"]
-        capped_ai_bonus = min(raw_ai_bonus, _AI_BONUS_CAP)
-        if raw_ai_bonus > _AI_BONUS_CAP:
-            ai_notes.append(f"[Shield Cap] AI보너스 상한 적용: {raw_ai_bonus:.1f} → {_AI_BONUS_CAP}점")
+        r_ai_bonus = ai_p.get("bonus", 0) - ai_p.get("penalty", 0) + auto_p.get("bonus", 0)
+        capped_ai_bonus = min(r_ai_bonus, _AI_BONUS_CAP)
+        if r_ai_bonus > _AI_BONUS_CAP:
+            ai_notes.append(f"[Shield Cap] AI보너스 상한 적용: {r_ai_bonus:.1f} → {_AI_BONUS_CAP}점")
         total_meta_bonus += capped_ai_bonus
 
         # [S1F/G1F 상대 점수]
-        rcDist = self._dist_from_race(recent)
+        rcDist = 1200
+        if recent and len(recent) > 0:
+            try:
+                rcDist = self._dist_from_race(recent)
+            except: pass
         s1f_score = self._rel_score(s1f_avg, self._get_std(rcDist, _S1F_STD)) if s1f_avg > 0 else 0
         g1f_score = self._rel_score(g1f_avg, self._get_std(rcDist, _G1F_STD)) if g1f_avg > 0 else 0
         
@@ -1056,15 +1073,16 @@ class QuantitativeAnalyzer:
                 
         return {"veto": is_veto, "diff": diff, "penalty": round(penalty, 1), "ratio": round(ratio, 2), "note": note}
 
-    def calc_closer_fatigue_and_bounce(self, horse_name: str, race_history: list[dict], g1f_vector: str, total_score_pre: float, date: str = "") -> dict:
+    def calc_style_based_fatigue_and_bounce(self, horse_name: str, race_history: list[dict], g1f_vector: str, total_score_pre: float, is_front: bool = False, date: str = "") -> dict:
         """
-        추입마(Closer)의 연투 피로도 및 바운스(Bounce) 현상 반영
-        - 직전 경주 입상(1-3위) 후 바운스 리스크 적용
-        - 21일 이내 짧은 휴식 시 추가 페널티
+        주행 스타일별 연투 피로도 및 바운스(Bounce) 현상 반영
+        - 추입마(Closer): 직전 입상 시 강력한 바운스 리스크 적용 (-15.0)
+        - 선행마(Front): 기본적으로 바운스 리스크 제외, 단 '경합 입상' 시에만 소폭 적용 (-5.0)
+        - 공통: 21일 이내 짧은 휴식 시 추가 페널티
         """
         if not race_history: return {"penalty": 0.0, "notes": []}
         
-        # 1. 추입마 판정 (G1F 벡터가 Strong/Maintaining이거나 과거 전개상 추입 비중이 높을 때)
+        # 1. 주행 스타일 판정 보강 (추입마 여부)
         is_closer = g1f_vector in ["Strong", "Maintaining"]
         if not is_closer:
             # 보조 판정: 전개 기록에서 후반에 올라오는 타입인지 확인
@@ -1073,12 +1091,10 @@ class QuantitativeAnalyzer:
             if avg_start_ord - avg_fin_ord >= 3.0: # 3두 이상 추월하는 경향
                 is_closer = True
         
-        if not is_closer: return {"penalty": 0.0, "notes": []}
-        
         penalty = 0.0
         notes = []
         
-        # 2. 직전 경주 성적 (Bounce 리스크)
+        # 2. 직전 경주 성적 및 상태 계산
         last_ord = self._to_int(race_history[0].get("ord", 99))
         is_peak = (last_ord <= 3)
         
@@ -1092,27 +1108,40 @@ class QuantitativeAnalyzer:
                 days_rest = (d1 - d2).days
             except: pass
         
-        # 페널티 산출
+        # 4. 스타일별 바운스 페널티 산출
         if is_peak:
-            # [USER STRATEGY] 추입마 연투 피로도 패널티 대폭 강화 (8.0 -> 15.0)
-            # 정상 출주를 해도 보통 입상 못함 -> 바운스 페널티 확실히 반영
-            bounce_p = 15.0 
-            penalty += bounce_p
-            notes.append(f"📉 [Bounce Risk] 직전 {last_ord}위 입상으로 인한 체력 소모/반동 리스크 강력 반영 (-{bounce_p}점)")
+            if is_closer:
+                # [STABILIZED] 추입마 연투 피로도 강력하게 유지
+                bounce_p = 15.0 
+                penalty += bounce_p
+                notes.append(f"📉 [Bounce Risk] 추입마 직전 {last_ord}위 입상으로 인한 반동 리스크 강력 반영 (-{bounce_p}점)")
+            
+            elif is_front:
+                # [NEW] 선행마 경합 여부 판정 (출발~4코너 내내 상위권 유지 시 힘을 많이 쓴 것)
+                last_start_ord = self._to_int(race_history[0].get("ord_start", 5))
+                last_4c_ord = self._to_int(race_history[0].get("ord_4c", 5))
+                is_duel = (last_start_ord <= 3 and last_4c_ord <= 3)
+                
+                if is_duel:
+                    bounce_p = 5.0
+                    penalty += bounce_p
+                    notes.append(f"📉 [Bounce Risk] 선행마 직전 경합 입상({last_start_ord}-{last_4c_ord}위)으로 인한 리스크 소폭 반영 (-{bounce_p}점)")
+                else:
+                    # 편안하게 앞서서 입상한 선행마는 바운스 없음 (사용자 피드백 반영)
+                    notes.append(f"✅ [Bounce Safe] 선행마 직전 여유로운 입상으로 컨디션 기량 유지 기대")
             
         if days_rest < 21:
             fatigue_p = 5.0
             penalty += fatigue_p
             notes.append(f"🔋 [Fatigue] {days_rest}일 만의 짧은 출전으로 인한 연투 피로도 감점 (-{fatigue_p}점)")
             
-        # 4. 특급마 예외 (High Score or Consistent)
+        # 5. 특급마 예외 (High Score or Consistent)
         if total_score_pre > 88.0:
             reduction = penalty * 0.5
             penalty -= reduction
             notes.append(f"🌟 [Elite Bonus] 능력치가 압도적인 특급마로 피로도 50% 감쇄 (보정 +{reduction:.1f}점)")
         
         # [NEW] 인기마(Favorite) 가드레일: 3.0배 이하 인기마는 바운스 리스크 70% 감쇄
-        # (현실적으로 강력한 인기마는 바운스보다 기량 유지가 우선임)
         market_odds = getattr(self, '_current_market_odds', 99.0)
         if market_odds <= 3.0 and penalty > 0:
             fav_reduction = penalty * 0.7
@@ -1139,14 +1168,15 @@ class QuantitativeAnalyzer:
                 score += 5.0
                 notes.append(f"🌧️ [Muddy-Front] 불량 주로 선행 유리 가산 (+5.0점)")
             else:
-                # 추입마: 기본 감점이나 G1F 탄력이 좋으면 보정
+                # [V12.2] 추입마: 불량 주로에서는 앞선이 무너지지 않아 역전이 거의 불가능함.
+                # 사용자 요청 반영: 과감하게 순위권 배제를 위해 패널티 강화 (-8.0 -> -15.0)
                 g1f_avg = speed_data.get("g1f_avg", 99)
                 if 0 < g1f_avg <= 13.4: # 탄력 우수
-                    score -= 2.0
-                    notes.append("🌧️ [Muddy-Closer] 불량 주로 추입 불리하나 막판 탄력으로 상쇄 (-2.0점)")
+                    score -= 5.0 # 기존 -2.0 -> -5.0
+                    notes.append("🌧️ [Muddy-Closer] 불량 주로 추입 불리하나 막판 탄력으로 최소 방어 (-5.0점)")
                 else:
-                    score -= 8.0
-                    notes.append("🌧️ [Muddy-Closer] 불량 주로 추입마 전개상 불리 위중 (-8.0점)")
+                    score -= 15.0 # 기존 -8.0 -> -15.0
+                    notes.append("🌧️ [Muddy-Closer] 불량 주로 추입마 절망적 전개 예상 (벌점 -15.0점)")
 
         # 2. 기수 불량 주로 적응력 (주요 기수 리스트)
         muddy_jockeys = ["서승운", "안토니오", "김용근", "문세영", "최시대", "다실바", "유승완", "임기원"]
@@ -1396,6 +1426,7 @@ class QuantitativeAnalyzer:
                       dam_sire: str = "",
                       race_context: dict = None,
                       market_rank: int = 12,
+                      pre_odds: float = 0.0, # [NEW] 아침/정적 분석 당시 배당
                       **kwargs) -> dict: # [FIX] 가변 인자 추가로 확장성 확보
         """
         마필 1두에 대한 종합 정량 분석.
@@ -1455,6 +1486,12 @@ class QuantitativeAnalyzer:
             w_wg_adv = self.ml_weights.get("w_wg_adv_jeju", 3.5)
             w_pos += 0.05
 
+        # [V12.2] 함수율 15% 이상(포화/불량) 시 위치 가중치(w_pos) 강제 증폭 (1.35배)
+        if moisture >= 15:
+            w_pos *= 1.35
+            # w_speed 소폭 하향 조정하여 합계 밸런스 유지 (옵션)
+            w_speed *= 0.9
+
         # [FIX] 분석 노트 컨테이너 — total 계산 전에 초기화 (NameError 방지)
         notes = []
 
@@ -1470,13 +1507,13 @@ class QuantitativeAnalyzer:
             promotion.get("score_adj", 0) # [NEW] 승급 임계마 승부 의지 보정
         )
         
-        # [NEW] 추입마 연투 피로도 및 바운스(Bounce) 로직 반영
+        # [NEW] 주행 스타일 기반 연투 피로도 및 바운스(Bounce) 로직 반영
         # [TEMP] market_odds 전달을 위해 임시 저장
         self._current_market_odds = market_odds
-        closer_fatigue = self.calc_closer_fatigue_and_bounce(horse_name, race_history, speed.get("g1f_vector", ""), total, date=date)
-        total -= closer_fatigue["penalty"]
-        if closer_fatigue["notes"]:
-            notes.extend(closer_fatigue["notes"])
+        style_fatigue = self.calc_style_based_fatigue_and_bounce(horse_name, race_history, speed.get("g1f_vector", ""), total, is_front=is_front_type, date=date)
+        total -= style_fatigue["penalty"]
+        if style_fatigue["notes"]:
+            notes.extend(style_fatigue["notes"])
 
         # [NEW] 기수-마필 궁합 (Jockey-Horse Synergy) 가산점 반영
         synergy = self.calc_jockey_horse_synergy(jk_name, race_history)
@@ -1512,13 +1549,47 @@ class QuantitativeAnalyzer:
         bubble = self.calc_bubble_horse(race_history, steward_reports or [])
         bubble_p = bubble["penalty"]
         
-        # [NEW] 인기마 가드레일: 2.5배 이하 초강력 인기마는 거품마 패널티 80% 무효화
-        if market_odds <= 2.5 and bubble_p > 0:
-            b_reduction = bubble_p * 0.8
+        # [REFINED] 인기마 가드레일: 3.0배 이하 인기마는 거품마 패널티 100% 무효화 및 보너스
+        if 0.1 < market_odds <= 3.0 and bubble_p > 0:
+            b_reduction = bubble_p * 1.0
             bubble_p -= b_reduction
             if bubble["is_bubble"]:
-                 notes.append(f"🛡️ [Bubble Guard] 초강인기마({market_odds}배) 거품 패널티 80% 보호 (+{b_reduction:.1f}점)")
+                 notes.append(f"🛡️ [Popularity Guard] 인기마({market_odds}배) 거품 패널티 100% 보호 (+{b_reduction:.1f}점)")
         
+        # [NEW] 시장 컨센서스 보너스 (저배당 누락 방지 Safetynet)
+        if 0.1 < market_odds <= 2.2:
+            total += 7.0 # 보너스 강화 (5.0 -> 7.0)
+            notes.append(f"🎯 [Market Focus] 시장 압도적 인기마 공식 보너스 (+7.0)")
+        elif 0.1 < market_odds <= 3.5:
+            total += 3.0 # 보너스 강화 (2.0 -> 3.0)
+            notes.append(f"🎯 [Popularity Bonus] 시장 상위권 인기마 보너스 (+3.0)")
+
+        # [NEW] 현장 바람(Wind) 탐지: 아침 예상배당보다 실시간 배당이 급격히 낮아진 경우 (현장 승부 기류)
+        wind_bonus = 0.0
+        if pre_odds > 0 and market_odds > 0:
+            # 배당이 30% 이상 급락한 경우 (실제 돈이 몰림)
+            if market_odds <= (pre_odds * 0.7) and market_odds <= 15.0:
+                wind_bonus = 5.0
+                notes.append(f"🌬️ [Wind Detection] 현장 바람 감지! 예상({pre_odds}배) 대비 실시간({market_odds}배) 급락 (+5.0)")
+            # 인기마인데 더 응축된 경우
+            elif market_odds <= 3.0 and market_odds <= (pre_odds * 0.85):
+                wind_bonus = 3.0
+                notes.append(f"🌬️ [Smart Money] 상위권 인기마 압착 감지! (+3.0)")
+        
+        total += wind_bonus
+
+        # [NEW] 제주(Meet 2) 전용 가중치 보정
+        if str(meet_code) == "2":
+            # 제주마는 게이트 이점과 마체중 변화가 서울보다 훨씬 민감함
+            if gate_no <= 3:
+                total += 3.0
+                notes.append(f"🏝️ [Jeju Gate] 제주 내선 이점 가중치 (+3.0)")
+            
+            # [FIX] 제주마 체중 범위 수정 (260~330kg)
+            if 260 <= current_weight <= 330: 
+                total += 2.0
+                notes.append(f"🏝️ [Jeju Weight] 제주마 적정 체중 안정권 (+2.0)")
+
         total -= bubble_p
         if bubble["is_bubble"] and bubble_p > 0:
             notes.append(f"🫧 거품마 주의: {bubble['bubble_reason']} (패널티 -{bubble_p}점)")
@@ -1538,9 +1609,9 @@ class QuantitativeAnalyzer:
         is_previous_winner = (last_placement <= 3)
 
         # [REFINED] 복병마 판정 보정: 직전 입상 시 복병마 명단에서 제외 (배당 가치 확보)
-        # 또한, 이미 입상한 불운마는 더 이상 복병 가치가 없으므로 패널티 부여
+        # 단, 인기마(odds <= 3.5)는 확률이 더 중요하므로 가치 소멸 패널티에서 제외
         if is_previous_winner:
-            if interference["dark_horse"] or unlucky.get("is_unlucky"):
+            if (interference["dark_horse"] or unlucky.get("is_unlucky")) and (market_odds > 3.5 or market_odds <= 0.1):
                 total -= 10.0
                 notes.append("📉 [Value Decay] 직전 입상으로 인한 복병 가치 소멸 및 과대평가 방지 패널티 (-10.0)")
             
@@ -1584,332 +1655,194 @@ class QuantitativeAnalyzer:
         if meet_code == "2" and weight_adv["advantage"] <= -3.0 and is_previous_winner:
              overload_warning = f"⚠ [과부하 경고] 부중 {abs(weight_adv['advantage'])}kg 급증. 축마 제외 권장."
              total -= 10 # 축마에서 멀어지도록 감점
-        
-        is_strong_front_strict = False
-        s1f_limit = 16.2 if meet_code == "2" else 13.5
-        g1f_limit = 13.4
-        
-        # [FIX] UnboundLocalError: 'is_closer' 변수 정의 누락 해결
-        # position["type"]이 '추입'이거나 speed["g1f_vector"]가 'Strong'이면서 S1F가 느린 경우를 고려
-        is_closer = (position.get("type") == "추입") or (speed.get("g1f_vector") == "Strong" and speed.get("s1f_avg", 0) > s1f_limit)
 
-        # [REFINED] 강선축마 판정: 선행력(S1F) + 지구력(G1F) + 전법(Not Closer)
-        if 0 < speed.get("s1f_avg", 99) <= s1f_limit and 0 < speed.get("g1f_avg", 99) <= g1f_limit:
-            # 추입마가 선행력이 좋게 나오는 경우(과거 기록 혼재) 방지
-            if not is_closer:
-                is_strong_front_strict = True
-                already_g1f_bonus = 10.0 if speed.get("g1f_vector") == "Strong" else 0.0
-                strong_front_bonus = max(0.0, 15.0 - already_g1f_bonus)
-                total += strong_front_bonus
-                notes.append(f"🔥 [강선축마] 선발됨: 선행력+지구력(G1F {speed.get('g1f_avg')}s) 검증 ({strong_front_bonus:.0f}점)")
+        # ─────────────────────────────────────────────
+        # [MASTER SPEC] 4대 핵심 지능형 지표 산출
+        # ─────────────────────────────────────────────
+        
+        # 1. 보정 속도 (ASI - Adjusted Speed Index)
+        # 주로 상태와 부중을 모두 녹여낸 마필의 '실질 속도'
+        asi_score = round(speed["speed_score"] * 0.8 + (100 - speed["s1f_avg"] * 5), 1)
+        
+        # 2. 뒷심 탄력 (LFC - Last Furlong Coefficient)
+        # G1F 타임과 탄력 벡터를 결합한 추입 에너지 지수
+        lfc_base = 100 - (speed["g1f_avg"] * 5)
+        lfc_bonus = 15 if speed["g1f_vector"] == "Strong" else (5 if speed["g1f_vector"] == "Good" else 0)
+        lfc_score = round(lfc_base + lfc_bonus, 1)
+        
+        # 3. 종합 전력 (TPS - Total Power Score)
+        # 훈련 상태, 위치 선정 능력, 일관성을 통합한 버팀 지수
+        tps_score = round((training["training_score"] * 0.4) + (position["position_score"] * 0.4) + 20, 1)
+        
+        # [LAB SPEC] 변칙적 외곽 전개 패턴 (사용자 수동 주입)
+        is_lab_outer = kwargs.get('lab_outer_anomalous', False)
+        if is_lab_outer:
+            # 부산/서울의 외곽 게이트(8번 이상) 추입마에게 '탄력 유지' 가산점 부여
+            if meet_code in ["1", "3"] and gate_no >= 8 and lfc_score >= 80:
+                total += 7.0
+                notes.append(f"🌌 [Lab] 변칙적 외곽 전개 패턴 가산 (+7.0)")
 
-        # 거리 적성 보너스
-        if dist_match["is_best"]: total += 5
-        if jockey_grade["grade"] == "S": total += 5
-
-        # [FIX] notes는 total 계산 전에 이미 초기화됨 (중복 제거)
-        if speed["speed_score"] >= 80: notes.append(f"⚡ 속도 지수 매우 우수 ({speed['speed_score']}점)")
-        if speed["g1f_vector"] == "Strong": notes.append("🚀 종반 탄력 우수 (G1F Strong)")
-        if speed["s1f_avg"] > 0 and speed["s1f_avg"] <= (16.2 if meet_code == "2" else 13.6): notes.append(f"🏁 초기 순발력 우수 (S1F {speed['s1f_avg']}s)")
-        
-        if position["position_score"] >= 60: notes.append("📍 입상권 포지션 선점 능력 우수")
-        if position.get("w_bonus_count", 0) > 0: notes.append(f"💪 외곽 주행 극복({position['w_bonus_count']}회) 전력 있음")
-        
-        if training["training_score"] >= 30: notes.append(f"🏋️ 조교 강도 높음 (총 {training['count']}회 / 강조교 {training['strong_count']}회)")
-        
-        if weight["veto"]: notes.append(f"⚠️ 체중 급변 주의: {weight['note']}")
-        
-        if interference["interference_score"] > 0: notes.append(f"🛡️ 방해 극복 가산점 반영 ({interference['interference_score']}점)")
-        if interference["dark_horse"]: notes.append(f"💣 복병마 판정: {interference['dark_horse_reason']}")
-        
-        if weight_adv["advantage"] >= 1.5: notes.append(f"📉 부중 감량 이득 ({weight_adv['advantage']}kg)")
-        elif weight_adv["advantage"] <= -1.5: notes.append(f"📈 부중 급증 패널티 ({weight_adv['advantage']}kg)")
-        
-        if dist_match["is_best"]: notes.append(f"🎯 최적 거리 ({current_dist}m) 검증됨")
-        if jockey_grade["grade"] == "S": notes.append("🏇 S급 기대 기수 기승")
-        if overload_warning: notes.append(overload_warning)
-        if dark_horse_reason: notes.append(f"💡 복병 팁: {dark_horse_reason}")
-        if is_special_management: notes.append("⭐ [특별 관리마] 최우선 검토 대상")
-        
-        # [NEW] AI 필승 패턴 통합 표시
-        if ai_notes:
-            for n in ai_notes:
-                if n not in notes: # 중복 방지
-                    notes.append(f"🤖 AI: {n}")
-
-        # [PRIVATE INFO] Consistency & Form
-        def safe_ord(v):
-            try: return int(float(str(v).replace(" 위","").strip()))
-            except: return 0
-        ranks = [safe_ord(h.get("ord", "0")) for h in race_history[:3] if safe_ord(h.get("ord", "0")) > 0]
-        consistency = np.std(ranks) if len(ranks) >= 2 else 5.0
-        avg_rank = np.mean(ranks) if ranks else 8.0
-
-        # [NEW] V4 Z-Score 분석용 Raw Metrics 추출 (+ Benter V3 피처 통합)
-        # benter_system.py의 build_feature_row 로직과 호환되도록 구성
-        
-        # 1. 기본 피처 (build_feature_row 기반)
-        # training_records가 analysis 딕셔너리로 넘어오는 경우 처리
-        # trainer_stats 파라미터는 build_feature_row 내부에서 training_records 대용으로 쓰임
-        f_row = build_feature_row(
-            {"hrName": horse_name, "jkName": jk_name, "trName": tr_name, "chulNo": gate_no, "weight": current_weight, "training_count": training.get("count", 0), "position_score": position.get("position_score", 0)},
-            race_history,
-            {}, # jockey_stats (사용 안함)
-            {**training, **unlucky, **interference} # trainer_stats / unlucky / interference factors
-        )
-        
-        # 2. V3 확장 피처 (ProbabilityLearner 로직 이식)
-        GLOBAL_AVG_RANK = 5.5
-        j_avg_map = getattr(self.benter_model, 'jockey_avg', {}) if self.benter_model else {}
-        s_map = getattr(self.benter_model, 'race_strength_map', {}) if self.benter_model else {}
-        
-        # [REMOVE] pure_avg_rank, pure_consistency 삭제
-        
-        # Jockey Boost
-        jk_clean = str(jk_name).replace(" ", "")
-        def to_i(v):
-            try: return int(float(str(v).split("-")[0]))
-            except: return None
+        # 4. 반란 지수 (RI - Rebellion Index)
+        # 인기 순위 대비 데이터가 강력한 '독자적 고배당 가능성'
+        ri_score = 0.0
+        market_rank = kwargs.get("market_rank", 99)
+        if market_rank >= 5 and total >= 65: # 비인기마인데 점수가 높을 때
+            ri_score = round((total - 60) * 2 + (market_rank * 3), 1)
+        elif total >= 80: # 절대 강자인 경우
+            ri_score = 10.0
             
-        with_jk = [to_i(r.get("ord")) for r in race_history 
-                   if str(r.get("jkName", "")).replace(" ", "") == jk_clean and to_i(r.get("ord")) is not None]
-        all_r = [to_i(r.get("ord")) for r in race_history if to_i(r.get("ord")) is not None]
-        
-        with_jk = [v for v in with_jk if v is not None]
-        all_r = [v for v in all_r if v is not None]
-        jk_boost = np.mean(all_r) - np.mean(with_jk) if len(with_jk) >= 2 and len(all_r) >= 2 else 0.0
-        
-        # Strength & Adjusted Rank
-        adj_ranks = []
-        strengths = []
-        for r in race_history[:5]:
-            rid = f"{r.get('rcDate', '0').replace('-','')}_{r.get('rcNo', '0')}"
-            st = s_map.get(rid, 1.0)
-            # Handle potential float strings
-            ord_val = int(float(str(r.get("ord", 99)).split("-")[0]))
-            adj_ranks.append(ord_val / st)
-            strengths.append(st)
-        
-        strength_avg = np.mean(strengths) if strengths else 1.0
-        avg_rank_adj = np.mean(adj_ranks) if adj_ranks else np.nan
-        
-        # 1. handicap_diff (Current - Avg of last 3)
-        h_history = [float(str(h.get("wgBudam", 0)).replace(",","")) for h in race_history[:3] if str(h.get("wgBudam", "")).replace(".","").replace(",","").isdigit()]
-        avg_h = np.mean(h_history) if h_history else current_burden
-        handicap_diff = current_burden - avg_h
-
-        # 2. class_up_down (1: Up, 0: Stay, -1: Down)
-        def _get_class_num(c_str):
-            match = re.search(r'(\d+)', str(c_str))
-            return int(match.group(1)) if match else 9
-        
-        curr_class_num = _get_class_num(race_class)
-        prev_class_num = _get_class_num(race_history[0].get("rank", race_class)) if race_history else curr_class_num
-        
-        # Lower number is higher class (1 > 6)
-        if curr_class_num < prev_class_num: class_up_down = 1
-        elif curr_class_num > prev_class_num: class_up_down = -1
-        else: class_up_down = 0
-
-        # 3. 통합 raw_metrics 생성 (BenterSystem.features 순서와 일치하도록 구성하되 딕셔너리로 보관)
-        raw_metrics = {
-            **f_row, # s1f, g1f, g3f, consistency, weight_stability, jockey_wr, trainer_wr, gate, dist_match, rest_weeks, training_count, position_score
-            "asi_s1f": speed.get("s1f_3_avg", 0),
-            "asi_g1f": speed.get("g1f_3_avg", 0),
-            "tps_score": speed.get("tps_score", 0),
-            "lfc_ratio": speed.get("lfc_ratio", 0),
-            "jk_boost": np.clip(jk_boost, -5.0, 5.0),
-            "strength_avg": np.clip(strength_avg, 0.5, 2.0),
-            "avg_rank_adj": np.clip(avg_rank_adj, 1.0, 20.0),
-            "handicap_diff": handicap_diff,
-            "class_up_down": class_up_down,
-            
-            # [FIX] Active Calibration 피처 확실히 포함 (build_feature_row에서 오기도 하지만 명시)
-            "outside_loss": unlucky.get("outside_loss", 0.0),
-            "blocked_penalty": unlucky.get("blocked_penalty", 0.0),
-            "late_spurt_bonus": unlucky.get("late_spurt_bonus", 0.0),
-            
-            # Additional logic from original quantitative code
-            "weight_diff": weight_diff,
-            "dist_match": dist_match.get("score", 0),
-            "is_m_trap": False,
-            "p_market": 1.0 / market_odds if market_odds > 0 else 0.05,
-            "synergy": 1.0,   # rank_horses에서 채움
-            "outside_loss": unlucky.get("outside_loss", 0.0),
-            "blocked_penalty": unlucky.get("blocked_penalty", 0.0),
-            "late_spurt_bonus": unlucky.get("late_spurt_bonus", 0.0)
-        }
-        
-        # Intent Scorer: 마체중 안정성
-        if race_history:
-            import re
-            def _extract_weight(w_val):
-                if not w_val: return 0.0
-                match = re.search(r'^(\d+\.?\d*)', str(w_val).strip())
-                return float(match.group(1)) if match else 0.0
-
-            curr_w = _extract_weight(current_weight) if current_weight else 0
-            last_w = _extract_weight(race_history[0].get("weight", curr_w)) if race_history else curr_w
-            raw_metrics["weight_stability"] = 1.0 / (abs(curr_w - last_w) + 1.0)
-        
-        # 공백기(9주+) 및 M-포지션 함정 판정
-        if race_history:
-            try:
-                from datetime import datetime
-                last_dt = datetime.strptime(str(race_history[0].get("date", "2000-01-01")), "%Y-%m-%d")
-                today = datetime.now()
-                raw_metrics["rest_weeks"] = (today - last_dt).days // 7
-                
-                # M-위치 함정: 직전 M(포지션) 입상인데 외곽(8번 이상) 게이트 배정
-                last_pos = str(race_history[0].get("pos", "")).upper()
-                if "M" in last_pos and is_previous_winner and gate_no >= 8:
-                    raw_metrics["is_m_trap"] = True
-            except: pass
-
-        # [NEW] 각질 및 타입 플래그 (필터링용)
-        # S1F가 기준(서울/부산 13.8s, 제주 18.2s)보다 느리고 포지션 점수가 낮으면 추입형(Closer)으로 간주
-        s1f_thresh = 18.2 if meet_code == "2" else 13.8
-        is_closer = (speed["s1f_avg"] > s1f_thresh) and (position["position_score"] < 30) if speed["s1f_avg"] > 0 else False
-        is_front_type = (speed["s1f_avg"] > 0 and speed["s1f_avg"] <= s1f_thresh) or (position["position_score"] >= 40)
-
-        # [PROBABILITY] ML 모델을 통한 승리 확률 예측
-        win_prob = 10.0 # 기본값 (10%)
-        # [FIX] 객체 속성 존재 여부 확인 (AttributeError 방지)
-        model = getattr(self, 'prob_model', None) or getattr(self, 'benter_model', None)
-        # [FIX] 단순 초(s)와 4회 전적 위치 변화(Sequence)를 종합한 강력한 판별 엔진 적용
-        pos_seq = self._analyze_position_sequence(race_history, speed, meet_code)
-        
-        # [NEW] Speed Tag Labels (UI/Gemini 표시용)
-        # S1F 태그: 초반 순발력 등급 (낮을수록 빠름), 보정값과 원본 기록 병기
-        s1f_norm = speed.get("s1f_avg", 0)
-        s1f_raw = speed.get("s1f_raw_avg", 0)
-        
-        if s1f_norm > 0:
-            s_grade = "초반최강" if s1f_norm <= 13.5 else "초반우수" if s1f_norm <= 14.0 else "초반보통"
-            # [REFINED] 원본 기록이 있을 때만 병기하고 깔끔하게 유지
-            raw_text = f" / {s1f_raw}s" if s1f_raw > 0 else ""
-            s1f_tag = f"{s_grade} ({s1f_norm}s{raw_text})"
-        else:
-            s1f_tag = ""
-        
-        # 종합 엔진에서 도출된 전법을 최종 사용 (N/A 외에는 별도 Fallback/Override 불필요)
-        tactical_role = pos_seq["type"]
-        
-        if tactical_role == "N/A":
-            tactical_role = "Unknown"
-
-        return {
+        # 결과 패키지 (한글 필드명 우선 적용)
+        res = {
+            "rank": 99,
             "horse_name": horse_name,
-            "total_score": round(total, 1),
-            "is_strong_front": is_strong_front_strict, # [REFINED] 지구력 검증된 강선축마
-            "tactical_position": pos_seq["summary"],
-            "analysis_notes": notes, 
-            "meet_code": meet_code,
-            "is_closer": (tactical_role == "추입"),
-            "is_front_type": (tactical_role == "선행"),
-            "last_placement": last_placement,
-            "current_dist": current_dist,
             "gate_no": gate_no,
-            "weight_advantage": weight_adv,
-            "win_prob": win_prob, # Placeholder, rank_horses에서 최종 계산
-            
-            # Speed
-            "speed_score": speed.get("speed_score", 0),
-            "s1f_avg": s1f_norm,
-            "s1f_raw_avg": speed.get("s1f_raw_avg", 0),
-            "g1f_avg": speed.get("g1f_avg", 0),
-            "g1f_raw_avg": speed.get("g1f_raw_avg", 0),
-            "g3f_avg": speed.get("g3f_avg", 0),
-            "asi_s1f": speed.get("s1f_3_avg", 0),
-            "asi_g1f": speed.get("g1f_3_avg", 0),
-            "tps_score": speed.get("tps_score", 0),
-            "lfc_ratio": speed.get("lfc_ratio", 0),
-            "g1f_vector": speed.get("g1f_vector", "N/A"),
-            
-            # [NEW] Edge Calculation
-            "market_odds": market_odds,
-            "edge": round(win_prob * market_odds / 100.0, 2) if market_odds > 0 else None,
-            
-            "s1f_tag": s1f_tag,
-            # G1F 태그: 종반 탄력 등급
-            "g1f_tag": (
-                (f"종반최강 ({speed.get('g1f_avg')}s)" if speed.get("g1f_avg", 0) <= 12.5 else
-                 f"종반우수 ({speed.get('g1f_avg')}s)" if speed.get("g1f_avg", 0) <= 13.0 else
-                 f"종반보통 ({speed.get('g1f_avg')}s)")
-                if speed.get("g1f_avg", 0) > 0 else ""
-            ),
-            # G3F 태그: 중반 탄력
-            "g3f_tag": (
-                f"중반우수 ({speed.get('g3f_avg')}s)" if 0 < speed.get("g3f_avg", 0) <= 37.5 else
-                f"중반보통 ({speed.get('g3f_avg')}s)" if speed.get("g3f_avg", 0) > 0 else ""
-            ),
-            # 전법 역할
-            "tactical_role": tactical_role,
-            
-            # Position
-            "position_score": position.get("position_score", 0),
-            "position": position,  # [FIX] Added missing 'position' dict
-            
-            # Weight
-            "veto": weight.get("veto", False),
-            "veto_reason": weight.get("note", "") if weight.get("veto") else "",
-            
-            # Training
-            "training_score": training.get("training_score", 0),
-            
-            # Interference / 복병
-            "interference_score": interference.get("interference_score", 0),
-            "interference_count": interference.get("interference_count", 0),
-            "dark_horse": interference.get("dark_horse", False),
-            "dark_horse_reason": interference.get("dark_horse_reason", ""),
-            
-            # Promotion
-            "promotion": promotion, # [FIX] Added missing 'promotion'
-            
-            # [NEW] V4 Unlucky Factors
-            "is_unlucky": unlucky.get("is_unlucky", False),
-            "is_strong_front": is_strong_front_strict,
-            "outside_loss": unlucky.get("outside_loss", 0.0),
-            "blocked_penalty": unlucky.get("blocked_penalty", 0.0),
-            "late_spurt_bonus": unlucky.get("late_spurt_bonus", 0.0),
-
-            # [NEW] 거품마 탐지 결과
-            "is_bubble": bubble.get("is_bubble", False),
-            "bubble_penalty": bubble.get("penalty", 0.0),
-            "bubble_reason": bubble.get("bubble_reason", ""),
-
-            # [NEW] AI에 전달할 과거 전적 요약 (Gemini "기록 없음" 방지)
-            "history_summary": [
-                {
-                    "date": h.get("date", ""),
-                    "dist": h.get("distance", ""),
-                    "ord": h.get("ord", ""),
-                    "rank": h.get("rank", ""),
-                    "s1f": h.get("s1f", ""),
-                    "g1f": h.get("g1f", ""),
-                    "weight": h.get("weight", ""),
-                    "pos_seq": "-".join([str(p) for p in [self._to_int(h.get("ord_start",99)), self._to_int(h.get("ord_1c",99)), self._to_int(h.get("ord_2c",99)), self._to_int(h.get("ord_3c",99)), self._to_int(h.get("ord_4c",99)), self._to_int(h.get("ord",99))] if p < 90])
-                } for h in race_history[:5]
-            ],
-            "steward_reports": steward_reports or [],
-
-            
-            # Z-Score Context
-            "raw_metrics": raw_metrics,
-            "is_special_management": is_special_management,
-            "is_previous_winner": is_previous_winner,
+            "total_score": round(total, 1),
+            "보정속도(ASI)": asi_score,
+            "뒷심탄력(LFC)": lfc_score,
+            "종합전력(TPS)": tps_score,
+            "반란지수(RI)": ri_score,
+            "speed": speed,
+            "position": position,
+            "training": training,
+            "weight": weight,
+            "unlucky": unlucky,
+            "interference": interference,
+            "promotion": promotion,
             "dist_match": dist_match,
-            "weight_advantage": weight_adv,
-            "dark_horse_reason": dark_horse_reason,
-            "overload_warning": overload_warning,
-            
-            # Real-time Context
-            "jk_name": jk_name,
-            "tr_name": tr_name,
-            "gate_no": int(gate_no) if gate_no is not None else 0,
-            "current_dist": int(current_dist) if current_dist is not None else 0,
-            "moisture": int(moisture) if moisture is not None else 0
+            "weight_adv": weight_adv,
+            "jockey": jockey_grade,
+            "is_veto": weight["veto"],
+            "notes": notes,
+            "market_odds": market_odds,
+            "market_rank": market_rank,
+            "is_golden_target": is_special_management,
+            "moisture": moisture,
+            "real_ord": kwargs.get("real_ord", 99),
+            "win_odds": kwargs.get("win_odds", market_odds)
         }
+        
+        return res
+
+    def run_monte_carlo_simulation(self, candidates: list, iterations: int = 10000) -> list:
+        """
+        [MASTER SPEC] 10,000회 몬테카를로 경주 시뮬레이션
+        각 마필의 ASI(평균)와 TPS(변동성)를 바탕으로 수만 번의 가상 경주를 수행하여
+        승률 및 입상 확률을 통계적으로 산출합니다.
+        """
+        if not candidates: return []
+        
+        import random
+        num_horses = len(candidates)
+        win_counts = [0] * num_horses
+        quinella_counts = [0] * num_horses # 2위 이내 입상 횟수
+        trio_counts = [0] * num_horses     # 3위 이내 입상 횟수
+        
+        # 시뮬레이션용 데이터 추출
+        # TPS가 낮을수록 결과의 불확실성(표준편차)이 큼
+        sim_data = []
+        for c in candidates:
+            # ASI를 기반으로 한 기대 기록 (값이 높을수록 빠름 -> 낮은 가상 기록 산출을 위해 역산)
+            base_perf = c.get("보정속도(ASI)", 50)
+            # TPS를 기반으로 한 기복(표준편차). TPS 100이면 편차 0.5, TPS 50이면 편차 1.5
+            volatility = max(0.5, (110 - c.get("종합전력(TPS)", 70)) * 0.03)
+            sim_data.append({"base": base_perf, "vol": volatility})
+
+        for _ in range(iterations):
+            race_results = []
+            for i in range(num_horses):
+                # 정규분포를 따른 가상 기록 생성
+                # ASI 점수가 높을수록 가상 기록(time_score)이 낮게(좋게) 나오도록 설정
+                perf = sim_data[i]["base"] + random.gauss(0, sim_data[i]["vol"])
+                race_results.append((i, 1000 - perf)) # 점수를 기록으로 변환하여 정렬
+            
+            # 기록 순으로 정렬 (결승선 통과 순서)
+            race_results.sort(key=lambda x: x[1])
+            
+            # 1위(승률), 2위(복승), 3위(삼복승) 카운트
+            win_counts[race_results[0][0]] += 1
+            for rank in range(min(2, num_horses)):
+                quinella_counts[race_results[rank][0]] += 1
+            for rank in range(min(3, num_horses)):
+                trio_counts[race_results[rank][0]] += 1
+                
+        # 확률 반영
+        for i in range(num_horses):
+            candidates[i]["win_prob"] = round((win_counts[i] / iterations) * 100, 1)
+            candidates[i]["quinella_prob"] = round((quinella_counts[i] / iterations) * 100, 1)
+            candidates[i]["trio_prob"] = round((trio_counts[i] / iterations) * 100, 1)
+            
+        return candidates
+
+    def rank_horses(self, horse_analyses: list, **kwargs) -> list:
+        """
+        분석된 마필들을 몬테카를로 시뮬레이션 기반으로 최종 정렬합니다.
+        가변 인자(**kwargs)를 수용하여 기존 호출부와의 호환성을 유지합니다.
+        """
+        if not horse_analyses:
+            # 호환성을 위해 딕셔너리 형태로 반환할 수도 있으나, 기본 리스트 반환 유지
+            return {"ranked_list": []} if "meet_code" in kwargs else []
+        
+        # 1. 시뮬레이션 수행 (10,000회 기본)
+        simulated = self.run_monte_carlo_simulation(horse_analyses)
+        
+        # 2. 승률(win_prob) 및 종합 점수(total_score) 기준 정렬
+        simulated.sort(key=lambda x: (x.get("win_prob", 0), x.get("total_score", 0)), reverse=True)
+        
+        # 3. 순위 부여
+        for i, h in enumerate(simulated, 1):
+            h["rank"] = i
+            
+        # 4. [호환성 패치] app.py가 중첩 딕셔너리를 기대하는 경우 전술 분석 함수로 브릿지
+        if "meet_code" in kwargs:
+            # [MASTER SPEC] 기존 evaluate_strategy 로직으로 연결하여 종합 전술 리포트 생성
+            # (구형 rank_horses가 수행하던 최종 래핑 역할을 여기서 수행)
+            return self.rank_horses_legacy_bridge(simulated, **kwargs)
+            
+        return simulated
+
+    def rank_horses_legacy_bridge(self, simulated: list, **kwargs) -> dict:
+        """기존 evaluate_strategy와의 호환성을 위한 브릿지 함수"""
+        from track_dynamics import TrackDynamics
+        td = TrackDynamics()
+        meet_code = kwargs.get("meet_code", "1")
+        moisture = simulated[0].get("moisture", 0) if simulated else 0
+        bias = td.quantify_track_bias(moisture, meet_code)
+        
+        # 하단 evaluate_strategy를 호출하여 최종 딕셔너리 구성
+        # (기존 app.py가 기대하는 pace_flag, strategy_badge 등이 모두 여기서 생성됨)
+        return self.rank_horses_original_logic_bridge(simulated, meet_code, **kwargs, track_bias=bias)
+
+    def rank_horses_original_logic_bridge(self, valid: list, meet_code: str, **kwargs) -> dict:
+        # 이 부분은 하단의 classify_race_for_betting 등과 연결하여 최종 리포트 반환
+        # (기존 rank_horses 하단에 있던 전개 분석 로직 요약)
+        from scipy.stats import rankdata
+        s1f_percentiles = rankdata([h.get("s1f_avg", 99.0) for h in valid], method='min') / len(valid) if valid else []
+        n_fast_starters = sum(1 for i, h in enumerate(valid) if s1f_percentiles[i] <= 0.35) if valid else 0
+        
+        # 페이스 분류
+        front_runners = [a for a in valid if self.is_leading_type(
+            a.get("leading_position", "") or
+            (a.get("position", {}).get("position", "R") if isinstance(a.get("position"), dict) else "R")
+        )]
+        n_front = len(front_runners)
+        if n_front == 0: pace_flag = "[후미 편성 - 복병/추입 경주]"
+        elif n_front == 1: pace_flag = "[단독 선행 - 황금 타겟]"
+        elif n_front <= 3: pace_flag = "[선행 경쟁 - 주의 경주]"
+        else: pace_flag = "[선행 과다 - 페이스 혼전]"
+
+        confusion_flag = "[분석중]"
+        if len(valid) >= 2:
+            top_gap = valid[0].get("win_prob", 0) - valid[1].get("win_prob", 0)
+            confusion_flag = "[압도적 축마]" if top_gap >= 10.0 else "[경합/혼전]"
+
+        target_info = self.classify_advanced_target(valid)
+        
+        return self.evaluate_strategy(
+            valid, meet_code=meet_code, pace_flag=pace_flag, 
+            confusion_flag=confusion_flag, target_info=target_info, 
+            dist=kwargs.get("dist", 0), grade=kwargs.get("grade", ""),
+            n_fast_starters=n_fast_starters
+        )
 
     def classify_advanced_target(self, ranked_analyses: list[dict]) -> dict:
         """
@@ -2039,14 +1972,23 @@ class QuantitativeAnalyzer:
         else:
             z_scores = (scores - score_mean) / score_std
             
-        # [REFINED] 배당 가중치 반영 (Market Bias) - 대폭 축소 (10-50배 고배당 발굴용)
-        # 시장 인기마에 대한 과도한 확률 가중치를 줄여 전산/AI만의 가치마를 우선함
+        # [V12.3 Audit] 배당 가중치 반영 (Market Bias) 및 정량 데이터 교차 검증
+        # Favorite Blindness 해소: 인기는 많지만(odds <= 3.5) 속도 지수가 하위권인 말은 보너스 축소
         market_bonus = []
         for h in valid:
             m_odds = float(h.get("market_odds", 99.0))
-            if 1.0 < m_odds <= 2.5: bonus = 0.1  # 인기마 (기존 0.5 -> 0.1)
-            elif m_odds <= 4.0: bonus = 0.05    # 강인기마 (기존 0.3 -> 0.05)
-            else: bonus = 0.0
+            s_score = h.get("speed_score", 0)
+            
+            if 1.0 < m_odds <= 2.2: 
+                # 초강축마: 속도가 낮으면 보너스 절반 (1.8 -> 0.9)
+                bonus = 1.8 if s_score >= 50 else 0.9
+            elif m_odds <= 3.5: 
+                # 인기마: 속도가 낮으면 보너스 절반 (0.8 -> 0.4)
+                bonus = 0.8 if s_score >= 40 else 0.4
+            elif m_odds <= 5.0:
+                bonus = 0.3
+            else: 
+                bonus = 0.0
             market_bonus.append(bonus)
         
         z_scores += np.array(market_bonus)
@@ -2074,9 +2016,9 @@ class QuantitativeAnalyzer:
                 h["kelly_ratio"] = 0.0
                 h["edge"] = 0.0
 
-        # [FIX] 정렬 기준을 total_score에서 win_prob(최종 확률)로 변경
-        # 시장 배당 가중치(market_bonus)가 반영된 win_prob이 더 정확한 랭킹 지표임
-        valid.sort(key=lambda x: x.get("win_prob", 0), reverse=True)
+        # [V12.4 Calibration] 다중 정렬 시스템 도입 (반성 및 교정)
+        # 1. win_prob (최종 확률/보정점수) -> 2. speed_score (순수 속도) -> 3. interference_score (방해 복원력)
+        valid.sort(key=lambda x: (x.get("win_prob", 0), x.get("speed_score", 0), x.get("interference_score", 0)), reverse=True)
         for i, h in enumerate(valid, 1): h["rank"] = i
         for i, h in enumerate(vetoed, len(valid) + 1):
             h["rank"] = i
@@ -2116,10 +2058,18 @@ class QuantitativeAnalyzer:
         else: pace_flag = "[선행 과다 - 페이스 혼전]"
 
         if len(valid) >= 2:
-            top_gap = valid[0].get("z_score", 0) - valid[1].get("z_score", 0)
-            confusion_flag = "[명확]" if top_gap >= 0.5 else ("[경합]" if top_gap >= 0.2 else "[혼전]")
+            # [V12.4] 축마 신뢰도(Axis Gap) 계산 및 경보 로직
+            top_gap = valid[0].get("win_prob", 0) - valid[1].get("win_prob", 0)
+            if top_gap >= 10.0:
+                confusion_flag = "[압도적 축마]"
+            elif top_gap >= 5.0:
+                confusion_flag = "[명확]"
+            elif top_gap >= 2.0:
+                confusion_flag = "[경합]"
+            else:
+                confusion_flag = "[혼전 - 축마 신뢰도 낮음]"
         else:
-            confusion_flag = "[정상]"
+            confusion_flag = "[데이터 부족]"
 
         target_info = self.classify_advanced_target(valid)
         # [SNIPER v7.3] 확신도 수치화(Confidence Meter)
@@ -2146,10 +2096,11 @@ class QuantitativeAnalyzer:
             dist=dist, grade=grade, 
             confidence=confidence_score, # 여기 이름을 confidence_score로 명확히 함
             rank_sum=rank_sum, 
-            n_fast_starters=n_fast_starters
+            n_fast_starters=n_fast_starters,
+            radar_info=None
         )
 
-    def evaluate_strategy(self, ranked: list[dict], meet_code: str = "1", pace_flag: str = "", confusion_flag: str = "", target_info: dict = None, dist: int = 0, grade: str = "", confidence: int = 0, rank_sum: int = 0, n_fast_starters: int = 0) -> dict:
+    def evaluate_strategy(self, ranked: list[dict], meet_code: str = "1", pace_flag: str = "", confusion_flag: str = "", target_info: dict = None, dist: int = 0, grade: str = "", confidence: int = 0, rank_sum: int = 0, n_fast_starters: int = 0, radar_info: dict = None) -> dict:
         """
         [SNIPER v7.3 Golden Weights]
         종합 점수를 기반으로 Sniper/SNI-PRO/Active/Lotto 등급을 결정하고 베팅 강도를 조절합니다.
@@ -2209,15 +2160,32 @@ class QuantitativeAnalyzer:
         ax2_odds = ranked[1].get("market_odds", 0.0) if len(ranked) >= 2 else 0.0
         expected_div = (ax1_odds * ax2_odds) / 1.5 if (ax1_odds > 0 and ax2_odds > 0) else 0.0
         
-        # [NEW] 제주(2)는 혼전/변수가 너무 많아 배당 필터를 아예 적용하지 않고 모두 승부처로 살림
-        # [MODIFIED - The Shield 완화] 고배당(30배)만 노리다가 중배당 기회를 놓치는 문제 방지 
-        div_threshold = 0.0 if meet_code == "2" else 10.0
+        # [MODIFIED V12] 혼전 경주 및 레이더 감지 시 배당 필터 우회 (사용자 피드백 반영)
+        # 1. 혼전/경합 여부
+        is_mixed = "[혼전]" in confusion_flag or "[경합]" in confusion_flag
+        # 2. 레이더 지수 (중배당 이상 징후)
+        radar_idx = radar_info.get('index', 0) if radar_info else 0
+        
+        # [V12.3 Audit] 배당 필터 임계값 하향 (6.5 -> 5.0) 및 레이더 연동 강화
+        # 유저 피드백: "맛있는 경주"를 놓치지 않도록 필터 완화
+        div_threshold = 0.0 if meet_code == "2" else 5.0
+        
+        # [BYPASS] 혼전이거나 레이더 지수 35 이상(기존 40) 시 배팅 필터 무력화
+        bypass_veto = False
+        if is_mixed or radar_idx >= 35:
+            div_threshold = 0.0
+            bypass_veto = True
         
         if bet_units > 0:
             if expected_div > 0 and expected_div < div_threshold:
                 sniper_grade = f"⚠️ 저배당 관망 추천 (예상 복승 {expected_div:.1f}배)"
                 bet_units = 0
                 bet_guide = f"🚨 AI 분석 결과 주력 쌍축({ax1_odds}x, {ax2_odds}x) 예상 복승 배당이 {div_threshold}배 미만이므로 배팅을 패스합니다."
+            elif bypass_veto and expected_div > 0 and expected_div < 10.0:
+                # 필터를 통과했지만 원래 10배 미만이었던 혼전 경주에 대한 코멘트 추가
+                prefix = f"💥 [혼전/레이더 소신 승부] " if expected_div > 0 else "💥 [고배당 승부처] "
+                sniper_grade = prefix + sniper_grade
+                bet_guide += f" (※ 인기마 배당은 낮으나 혼전 성격상 고배당 가능성이 높아 배팅을 감행합니다.)"
             else:
                 prefix = f"💥 [{int(div_threshold)}배 이상 승부처] " if expected_div > 0 else "💥 [고배당 승부처] "
                 sniper_grade = prefix + sniper_grade
@@ -2423,6 +2391,73 @@ class QuantitativeAnalyzer:
             try: return float(match.group(1))
             except: return 0.0
         return 0.0
+
+    def calculate_betting_distribution(self, ranked_list: list[dict]) -> dict:
+        """
+        AI 확률(win_prob)을 기반으로 복승/삼복승 예상 확률 및 100단위 비중 계산
+        """
+        # 상위 6마리만 추출 (그 이상의 조합은 실전성이 떨어짐)
+        top = [h for h in ranked_list if h.get("win_prob", 0) > 0][:6]
+        if len(top) < 2:
+            return {"quinella": [], "trio": []}
+            
+        # 1. 복승(Quinella) 계산
+        q_probs = []
+        for i in range(len(top)):
+            for j in range(i + 1, len(top)):
+                h1, h2 = top[i], top[j]
+                p1, p2 = h1["win_prob"] / 100.0, h2["win_prob"] / 100.0
+                
+                # Harville Formula: P(1st=A, 2nd=B) = P(A) * P(B)/(1-P(A))
+                # 복승은 순서 상관 없으므로 P(A,B) + P(B,A)
+                prob = (p1 * p2 / (1.0 - p1 + 1e-9)) + (p2 * p1 / (1.0 - p2 + 1e-9))
+                q_probs.append({
+                    "combination": f"{h1.get('gate_no', h1.get('hrNo'))}-{h2.get('gate_no', h2.get('hrNo'))}",
+                    "prob": prob,
+                    "names": f"{h1.get('horse_name')}-{h2.get('horse_name')}"
+                })
+        
+        # 2. 삼복승(Trio) 계산
+        t_probs = []
+        if len(top) >= 3:
+            for i in range(len(top)):
+                for j in range(i + 1, len(top)):
+                    for k in range(j + 1, len(top)):
+                        h1, h2, h3 = top[i], top[j], top[k]
+                        p1, p2, p3 = h1["win_prob"] / 100.0, h2["win_prob"] / 100.0, h3["win_prob"] / 100.0
+                        
+                        # Harville Trio: Sum of all 6 permutations
+                        def p_triple(a, b, c):
+                            return (a * b * c) / ((1-a+1e-9) * (1-a-b+1e-9))
+                        
+                        prob = (p_triple(p1, p2, p3) + p_triple(p1, p3, p2) +
+                                p_triple(p2, p1, p3) + p_triple(p2, p3, p1) +
+                                p_triple(p3, p1, p2) + p_triple(p3, p2, p1))
+                        
+                        t_probs.append({
+                            "combination": f"{h1.get('gate_no', h1.get('hrNo'))}-{h2.get('gate_no', h2.get('hrNo'))}-{h3.get('gate_no', h3.get('hrNo'))}",
+                            "prob": prob,
+                            "names": f"{h1.get('horse_name')}-{h2.get('horse_name')}-{h3.get('horse_name')}"
+                        })
+
+        # 비중(Weight) 계산 (상위 N개만 추출 후 100단위로 정규화)
+        def normalize(probs, limit=5):
+            probs.sort(key=lambda x: x["prob"], reverse=True)
+            top_n = probs[:limit]
+            total = sum(x["prob"] for x in top_n)
+            if total > 0:
+                for x in top_n:
+                    x["units"] = int(round((x["prob"] / total) * 100))
+                # 합계 100 맞추기 (반올림 오차 조정)
+                unit_sum = sum(x["units"] for x in top_n)
+                if unit_sum != 100 and top_n:
+                    top_n[0]["units"] += (100 - unit_sum)
+            return top_n
+
+        return {
+            "quinella": normalize(q_probs, 5),
+            "trio": normalize(t_probs, 3)
+        }
 
 
 
